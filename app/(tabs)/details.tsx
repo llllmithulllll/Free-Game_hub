@@ -1,14 +1,17 @@
+import { Ionicons } from "@expo/vector-icons"; // ✅ Added for share icon
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Image,
-    Linking,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator, // ✅ Added for sharing
+  Alert,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 
 export default function Details() {
@@ -16,7 +19,6 @@ export default function Details() {
   const [game, setGame] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Refetch when ID changes
   useEffect(() => {
     if (id) {
       fetchGame();
@@ -38,6 +40,20 @@ export default function Details() {
     }
   }
 
+  // ➕ Function to trigger the native share dialog
+  const handleShare = async () => {
+    if (!game) return;
+    
+    try {
+      await Share.share({
+        message: `Check out ${game.title} on Free-Game-Hub! 🎮\nPlay it here: ${game.game_url}`,
+        url: game.game_url, // URL field specifically for iOS support
+      });
+    } catch (error: any) {
+      Alert.alert("Error", "Could not share the game link.");
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -56,11 +72,20 @@ export default function Details() {
       {/* HERO IMAGE */}
       <Image source={{ uri: game.thumbnail }} style={styles.banner} />
 
-      {/* TITLE */}
-      <Text style={styles.title}>{game.title}</Text>
-      <Text style={styles.meta}>
-        {game.genre} • {game.platform}
-      </Text>
+      {/* HEADER SECTION WITH SHARE */}
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{game.title}</Text>
+          <Text style={styles.meta}>
+            {game.genre} • {game.platform}
+          </Text>
+        </View>
+        
+        {/* ➕ Share Icon Button */}
+        <Pressable onPress={handleShare} style={styles.shareButton}>
+          <Ionicons name="share-social-outline" size={24} color="#f5c518" />
+        </Pressable>
+      </View>
 
       {/* CTA */}
       <Pressable
@@ -126,75 +151,74 @@ const styles = StyleSheet.create({
     backgroundColor: "#121212",
     padding: 12,
   },
-
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#121212",
   },
-
   banner: {
     width: "100%",
     height: 220,
     borderRadius: 12,
   },
-
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginTop: 12,
+  },
   title: {
     color: "#fff",
     fontSize: 24,
     fontWeight: "bold",
-    marginTop: 12,
   },
-
   meta: {
     color: "#f5c518",
     fontSize: 13,
     marginTop: 4,
   },
-
+  shareButton: {
+    padding: 10,
+    backgroundColor: "#1e1e1e",
+    borderRadius: 30,
+    marginLeft: 10,
+  },
   playButton: {
     marginTop: 14,
     backgroundColor: "#f5c518",
     paddingVertical: 12,
     borderRadius: 10,
   },
-
   playText: {
     textAlign: "center",
     fontWeight: "bold",
     color: "#000",
     fontSize: 15,
   },
-
   section: {
     marginTop: 22,
   },
-
   sectionTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "bold",
     marginBottom: 10,
   },
-
   desc: {
     color: "#ccc",
     fontSize: 14,
     lineHeight: 22,
   },
-
   infoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 8,
   },
-
   infoLabel: {
     color: "#aaa",
     fontSize: 13,
   },
-
   infoValue: {
     color: "#fff",
     fontSize: 13,

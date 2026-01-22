@@ -1,27 +1,49 @@
-import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { getApp, getApps, initializeApp } from "firebase/app";
+import { getAuth, getReactNativePersistence, initializeAuth } from "firebase/auth";
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager
+} from "firebase/firestore";
 
 /* ---------------- CONFIG ---------------- */
-
+// Pulling keys from .env for security
 const firebaseConfig = {
-  apiKey: "AIzaSyAOtObYNLV_5XgechkHrtwGw_XkK1AMAZw",
-  authDomain: "gamehub-1322d.firebaseapp.com",
-  projectId: "gamehub-1322d",
-  storageBucket: "gamehub-1322d.firebasestorage.app",
-  messagingSenderId: "843797453071",
-  appId: "1:843797453071:web:32b90b551e584c56ce867a",
-  measurementId: "G-60HVXMWSQH"
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
 /* ---------------- INIT ---------------- */
-
-const app = initializeApp(firebaseConfig);
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 /* ---------------- AUTH ---------------- */
-// ✅ DO NOT use react-native persistence yet
-export const auth = getAuth(app);
+let firebaseAuth;
+try {
+  firebaseAuth = getAuth(app);
+} catch (e) {
+  firebaseAuth = initializeAuth(app, {
+    persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+  });
+}
+export const auth = firebaseAuth;
 
 /* ---------------- DATABASE ---------------- */
+let firestoreDb;
+try {
+  firestoreDb = getFirestore(app);
+} catch (e) {
+  firestoreDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  });
+}
 
-export const db = getFirestore(app);
+export const db = firestoreDb;

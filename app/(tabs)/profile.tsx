@@ -1,202 +1,238 @@
-import { useEffect, useState } from "react";
+import { auth, db } from "@/lib/firebase";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { collection, deleteDoc, doc, getDoc, onSnapshot, query, updateDoc } from "firebase/firestore";
+import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
-import { auth, db } from "@/lib/firebase";
-import { signOut } from "firebase/auth";
-import {
-    collection,
-    onSnapshot,
-    orderBy,
-    query,
-} from "firebase/firestore";
-
 export default function Profile() {
-  const [loading, setLoading] = useState(true);
   const [claimedGames, setClaimedGames] = useState<any[]>([]);
-  const [profileName, setProfileName] = useState("Player");
+  const [userName, setUserName] = useState("Gamer");
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  // --- States for Themed Removal ---
+  const [removeModalVisible, setRemoveModalVisible] = useState(false);
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // --- States for Editing Name ---
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
 
   useEffect(() => {
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
 
-    // Profile name
-    setProfileName(user.displayName || user.email || "Player");
+    const fetchUser = async () => {
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        setUserName(data.displayName || "Gamer");
+        setNewName(data.displayName || "Gamer");
+      }
+    };
+    fetchUser();
 
-    // 🔥 REAL-TIME LISTENER
-    const ref = collection(db, "users", user.uid, "claimedGames");
-    const q = query(ref, orderBy("claimedAt", "desc"));
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const games = snap.docs.map((doc) => ({
+    const q = query(collection(db, "users", user.uid, "claimedGames"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const games = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
-
       setClaimedGames(games);
       setLoading(false);
     });
 
-    return unsubscribe;
+    return () => unsubscribe();
   }, []);
 
-  async function handleLogout() {
-    await signOut(auth);
-  }
+  // --- Handler for Name Update ---
+  const handleUpdateName = async () => {
+    if (!newName.trim() || !auth.currentUser) return;
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#f5c518" />
+    try {
+      setIsUpdatingName(true);
+      const userRef = doc(db, "users", auth.currentUser.uid);
+      await updateDoc(userRef, {
+        displayName: newName.trim(),
+      });
+      setUserName(newName.trim());
+      setEditModalVisible(false);
+    } catch (error) {
+      console.error("Error updating name:", error);
+    } finally {
+      setIsUpdatingName(false);
+    }
+  };
+
+  const triggerRemove = (gameId: string) => {
+    setSelectedGameId(gameId);
+    setRemoveModalVisible(true);
+  };
+
+  const handleRemoveGame = async () => {
+    if (!selectedGameId || !auth.currentUser) return;
+    try {
+      setIsDeleting(true);
+      await deleteDoc(doc(db, "users", auth.currentUser.uid, "claimedGames", selectedGameId));
+      setRemoveModalVisible(false);
+    } catch (error) {
+      console.error("Delete Error:", error);
+    } finally {
+      setIsDeleting(false);
+      setSelectedGameId(null);
+    }
+  };
+
+  const renderGameItem = ({ item }: { item: any }) => (
+    <View style={styles.gameCard}>
+      <Image source={{ uri: item.thumbnail }} style={styles.thumbnail} />
+      <View style={styles.gameInfo}>
+        <Text style={styles.gameTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={styles.gameGenre}>{item.genre}</Text>
       </View>
-    );
-  }
+      <Pressable onPress={() => triggerRemove(item.id)} style={styles.removeBtn}>
+        <Ionicons name="trash-outline" size={20} color="#ff4444" />
+      </Pressable>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
-      {/* PROFILE HEADER */}
-      <View style={styles.profileHeader}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {profileName.charAt(0).toUpperCase()}
-          </Text>
+      {/* --- THEMED EDIT NAME MODAL --- */}
+      <Modal visible={editModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Profile Name</Text>
+            <TextInput
+              style={styles.editInput}
+              value={newName}
+              onChangeText={setNewName}
+              placeholder="Enter your name"
+              placeholderTextColor="#666"
+              autoFocus
+            />
+            <View style={styles.modalActionRow}>
+              <Pressable style={[styles.modalBtn, styles.cancelBtn]} onPress={() => setEditModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[styles.modalBtn, styles.saveBtn]} onPress={handleUpdateName} disabled={isUpdatingName}>
+                {isUpdatingName ? <ActivityIndicator color="#000" /> : <Text style={styles.saveBtnText}>Save</Text>}
+              </Pressable>
+            </View>
+          </View>
         </View>
+      </Modal>
 
-        <Text style={styles.profileName}>{profileName}</Text>
+      {/* --- THEMED REMOVAL MODAL --- */}
+      <Modal visible={removeModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.iconCircle}>
+                <Ionicons name="trash-bin-outline" size={40} color="#ff4444" />
+            </View>
+            <Text style={styles.modalTitle}>Remove Game?</Text>
+            <Text style={styles.modalSubtitle}>This will remove the game from your library.</Text>
+            <View style={styles.modalActionRow}>
+              <Pressable style={[styles.modalBtn, styles.cancelBtn]} onPress={() => setRemoveModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Keep It</Text>
+              </Pressable>
+              <Pressable style={[styles.modalBtn, styles.deleteBtn]} onPress={handleRemoveGame} disabled={isDeleting}>
+                {isDeleting ? <ActivityIndicator color="#fff" /> : <Text style={styles.deleteBtnText}>Remove</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* --- UPDATED HEADER WITH EDIT OPTION --- */}
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.welcomeText}>Hello,</Text>
+          <View style={styles.nameRow}>
+            <Text style={styles.userName}>{userName}</Text>
+            <Pressable onPress={() => setEditModalVisible(true)} style={styles.editIconBtn}>
+              <Ionicons name="pencil" size={16} color="#f5c518" />
+            </Pressable>
+          </View>
+        </View>
+        <Pressable style={styles.prefBtn} onPress={() => router.push("/preferences")}>
+          <Ionicons name="options-outline" size={18} color="#000" />
+          <Text style={styles.prefBtnText}>Prefs</Text>
+        </Pressable>
       </View>
 
-      {/* CLAIMED GAMES */}
-      <Text style={styles.sectionTitle}>My Claimed Games</Text>
+      <View style={styles.librarySubHeader}>
+        <Text style={styles.libraryTitle}>My Library</Text>
+        <Text style={styles.headerCount}>{claimedGames.length} Games</Text>
+      </View>
 
-      {claimedGames.length === 0 ? (
-        <Text style={styles.empty}>No claimed games yet</Text>
+      {loading ? (
+        <ActivityIndicator size="large" color="#f5c518" style={{ marginTop: 50 }} />
       ) : (
         <FlatList
           data={claimedGames}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={{ paddingBottom: 20 }}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Image source={{ uri: item.thumbnail }} style={styles.image} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.gameTitle} numberOfLines={2}>
-                  {item.title}
-                </Text>
-                <Text style={styles.platform}>{item.platforms}</Text>
-              </View>
-            </View>
-          )}
+          renderItem={renderGameItem}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={<Text style={styles.emptyText}>Your library is empty.</Text>}
         />
       )}
-
-      {/* LOGOUT */}
-      <Pressable style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Logout</Text>
-      </Pressable>
     </View>
   );
 }
 
-/* ---------------- STYLES ---------------- */
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#121212",
-    padding: 16,
-  },
+  container: { flex: 1, backgroundColor: "#121212", padding: 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 40, marginBottom: 30 },
+  welcomeText: { color: "#aaa", fontSize: 16 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  userName: { color: "#fff", fontSize: 24, fontWeight: "bold" },
+  editIconBtn: { marginLeft: 10, padding: 5, backgroundColor: '#1e1e1e', borderRadius: 5 },
+  prefBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: "#f5c518", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20 },
+  prefBtnText: { color: "#000", fontWeight: "bold", marginLeft: 5, fontSize: 12 },
+  
+  librarySubHeader: { marginBottom: 15 },
+  libraryTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
+  headerCount: { color: "#f5c518", fontSize: 13, marginTop: 2 },
+  
+  listContent: { paddingBottom: 100 },
+  gameCard: { flexDirection: "row", backgroundColor: "#1e1e1e", borderRadius: 12, padding: 10, marginBottom: 15, alignItems: "center" },
+  thumbnail: { width: 80, height: 50, borderRadius: 6 },
+  gameInfo: { flex: 1, marginLeft: 15 },
+  gameTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+  gameGenre: { color: "#aaa", fontSize: 12, marginTop: 2 },
+  removeBtn: { padding: 10 },
+  emptyText: { color: "#aaa", textAlign: "center", marginTop: 100, fontSize: 16 },
 
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#121212",
-  },
-
-  profileHeader: {
-    alignItems: "center",
-    marginBottom: 20,
-  },
-
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "#f5c518",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-
-  avatarText: {
-    color: "#000",
-    fontSize: 28,
-    fontWeight: "bold",
-  },
-
-  profileName: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-
-  sectionTitle: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-    marginBottom: 12,
-  },
-
-  empty: {
-    color: "#aaa",
-    marginTop: 40,
-    textAlign: "center",
-  },
-
-  card: {
-    flexDirection: "row",
-    backgroundColor: "#1e1e1e",
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 10,
-  },
-
-  image: {
-    width: 70,
-    height: 70,
-    borderRadius: 8,
-    marginRight: 10,
-  },
-
-  gameTitle: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "bold",
-  },
-
-  platform: {
-    color: "#f5c518",
-    fontSize: 11,
-    marginTop: 4,
-  },
-
-  logoutBtn: {
-    backgroundColor: "#e74c3c",
-    padding: 14,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-
-  logoutText: {
-    color: "#fff",
-    fontWeight: "bold",
-    textAlign: "center",
-  },
+  // --- MODAL STYLES ---
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { backgroundColor: '#1e1e1e', padding: 25, borderRadius: 24, alignItems: 'center', width: '85%', borderWidth: 1, borderColor: '#333' },
+  editInput: { width: '100%', backgroundColor: '#2a2a2a', color: '#fff', padding: 15, borderRadius: 12, marginTop: 20, marginBottom: 20, fontSize: 16 },
+  iconCircle: { backgroundColor: 'rgba(255, 68, 68, 0.1)', padding: 20, borderRadius: 50, marginBottom: 10 },
+  modalTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+  modalSubtitle: { color: '#aaa', textAlign: 'center', marginTop: 10, marginBottom: 25 },
+  modalActionRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
+  modalBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginHorizontal: 5 },
+  cancelBtn: { backgroundColor: '#333' },
+  saveBtn: { backgroundColor: '#f5c518' },
+  deleteBtn: { backgroundColor: '#ff4444' },
+  cancelBtnText: { color: '#fff', fontWeight: 'bold' },
+  saveBtnText: { color: '#000', fontWeight: 'bold' },
+  deleteBtnText: { color: '#fff', fontWeight: 'bold' }
 });
