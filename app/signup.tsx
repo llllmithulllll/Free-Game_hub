@@ -59,7 +59,7 @@ export default function Signup() {
       });
 
       await signOut(auth);
-      showAlert("Verify Your Email", `We sent a link to ${email}. Please check your inbox!`, "success");
+      showAlert("Verify Your Email", `We sent a link to ${email}. Please check your inbox or spam folder!`, "success");
     } catch (error: any) {
       let msg = "Credentials aren't right. Please try again.";
       if (error.code === 'auth/email-already-in-use') msg = "This email is already registered.";
