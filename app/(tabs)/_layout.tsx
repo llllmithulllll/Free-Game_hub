@@ -7,13 +7,13 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: "#1e1e1e", // Matches your app theme
+          backgroundColor: "#1e1e1e",
           borderTopWidth: 1,
           borderTopColor: "#333",
           height: 60,
           paddingBottom: 8,
         },
-        tabBarActiveTintColor: "#f5c518", // Theme yellow accent
+        tabBarActiveTintColor: "#f5c518",
         tabBarInactiveTintColor: "#888",
         tabBarLabelStyle: {
           fontSize: 12,
@@ -21,7 +21,7 @@ export default function TabLayout() {
         },
       }}
     >
-      {/* VISIBLE TABS */}
+      {/* 1. HOME TAB */}
       <Tabs.Screen
         name="index"
         options={{
@@ -31,6 +31,8 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* 2. GIVEAWAYS TAB (Restored) */}
       <Tabs.Screen
         name="free_now"
         options={{
@@ -40,6 +42,8 @@ export default function TabLayout() {
           ),
         }}
       />
+      
+      {/* 3. PROFILE TAB */}
       <Tabs.Screen
         name="profile"
         options={{
@@ -50,23 +54,16 @@ export default function TabLayout() {
         }}
       />
 
-      {/* 🚫 HIDDEN TABS */}
-      {/* Setting href: null hides them from the bottom bar UI */}
+      {/* HIDDEN ROUTES (No icons, but accessible via navigation) */}
       <Tabs.Screen
         name="details"
         options={{
-          href: null, // Hides the tab
+          href: null, 
         }}
       />
+      
       <Tabs.Screen
         name="preferences"
-        options={{
-          href: null, // Hides the tab
-        }}
-      />
-      {/* If you have giveaway_details.tsx in this folder, hide it too */}
-      <Tabs.Screen
-        name="giveaway_details"
         options={{
           href: null,
         }}

@@ -1,12 +1,32 @@
+import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+
+import {
+  collection,
+  doc,
+  getDocs,
+  limit,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
+
+import React, {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
-  Keyboard,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,185 +35,1834 @@ import {
   View,
 } from "react-native";
 
-const SEARCH_HISTORY_KEY = "@game_search_history";
+// ============================================================
+// CONSTANTS
+// ============================================================
+
 const CACHE_KEY = "@cached_games_list";
-const CATEGORIES = ["All", "Shooter", "MOBA", "Anime", "Racing", "Strategy", "Sports"];
+
+const GENRES = [
+  "Action",
+  "Adventure",
+  "RPG",
+  "Shooter",
+  "Strategy",
+  "Simulation",
+  "Sports",
+  "Racing",
+  "Puzzle",
+  "Fighting",
+];
+
+const TAGS = [
+  "Multiplayer",
+  "Singleplayer",
+  "Co-op",
+  "Online Co-Op",
+  "Local Co-Op",
+  "PvP",
+  "Open World",
+  "Survival",
+];
+
+const PLATFORMS = [
+  "PC",
+  "PlayStation 5",
+  "PlayStation 4",
+  "Xbox Series S/X",
+  "Xbox One",
+  "Nintendo Switch",
+];
+
+// ============================================================
+// HOME
+// ============================================================
 
 export default function Home() {
+  // ==========================================================
+  // STATE
+  // ==========================================================
+
   const [allGames, setAllGames] = useState<any[]>([]);
+
+  // RAWG + Firestore search results are stored separately.
+  // Filters can then operate on these results instantly.
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+
   const [filteredGames, setFilteredGames] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  const [loading, setLoading] = useState(false);
+
+  const [page, setPage] = useState(1);
+
   const [search, setSearch] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [history, setHistory] = useState<string[]>([]);
-  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+
+  const [filterVisible, setFilterVisible] = useState(false);
+
+  // ==========================================================
+  // FILTER STATE
+  // ==========================================================
+
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+
   const router = useRouter();
+
+  // Search debounce
+  const searchTimeout =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Prevent older search requests replacing newer results
+  const searchRequestId = useRef(0);
+
+  // ==========================================================
+  // INITIAL LOAD
+  // ==========================================================
 
   useEffect(() => {
     initializeData();
-    loadSearchHistory();
+
+    return () => {
+      if (searchTimeout.current) {
+        clearTimeout(searchTimeout.current);
+      }
+    };
   }, []);
 
-  // --- Caching & Data Fetching Logic ---
+  // ==========================================================
+  // INITIALIZE
+  // ==========================================================
+
   const initializeData = async () => {
     try {
-      setLoading(true);
-      // 1. Check if we have cached games on the device
       const cached = await AsyncStorage.getItem(CACHE_KEY);
+
       if (cached) {
-        const parsedData = JSON.parse(cached);
-        setAllGames(parsedData);
-        setFilteredGames(parsedData);
-        setLoading(false);
-        // Still fetch in background to keep data fresh, but don't show loader
-        fetchGames(false); 
-      } else {
-        // 2. No cache, must fetch immediately
-        await fetchGames(true);
+        const parsed = JSON.parse(cached);
+
+        setAllGames(parsed);
+        setFilteredGames(parsed);
       }
-    } catch (e) {
-      console.error("Cache Load Error", e);
-      fetchGames(true);
+    } catch (error) {
+      console.error("Cache Error:", error);
+
+      await AsyncStorage.removeItem(CACHE_KEY);
+    }
+
+    fetchGames(1, true);
+  };
+
+  // ==========================================================
+  // FORMAT RAWG GAME
+  // ==========================================================
+
+  const formatRawgGame = (game: any) => {
+    const genres =
+      game.genres?.map(
+        (genre: any) => genre.name
+      ) || [];
+
+    const tags =
+      game.tags?.map(
+        (tag: any) => tag.name
+      ) || [];
+
+    const platforms =
+      game.platforms?.map(
+        (item: any) => item.platform.name
+      ) || [];
+
+    return {
+      id: game.id.toString(),
+
+      title: game.name,
+
+      // Keep old genre property for compatibility
+      genre:
+        genres[0] ||
+        "Game",
+
+      genres,
+
+      tags,
+
+      platforms,
+
+      thumbnail:
+        game.background_image ||
+        "https://via.placeholder.com/150",
+    };
+  };
+
+  // ==========================================================
+  // SAVE FIRESTORE CACHE
+  // ==========================================================
+
+  const saveToGlobalCache = async (
+    games: any[]
+  ) => {
+    if (!auth.currentUser) {
+      console.log(
+        "Skipping global cache write — no authenticated user"
+      );
+
+      return;
+    }
+
+    if (!games || games.length === 0) {
+      return;
+    }
+
+    try {
+      const batch =
+        writeBatch(db);
+
+      games.forEach(
+        (game) => {
+          const ref = doc(
+            db,
+            "global_games",
+            game.id.toString()
+          );
+
+          batch.set(
+            ref,
+
+            {
+              id:
+                game.id.toString(),
+
+              title:
+                game.title,
+
+              searchName:
+                game.title.toLowerCase(),
+
+              thumbnail:
+                game.thumbnail,
+
+              genre:
+                game.genre,
+
+              genres:
+                game.genres || [],
+
+              tags:
+                game.tags || [],
+
+              platforms:
+                game.platforms || [],
+
+              lastUpdated:
+                serverTimestamp(),
+            },
+
+            {
+              merge: true,
+            }
+          );
+        }
+      );
+
+      await batch.commit();
+    } catch (error: any) {
+      console.error(
+        "Firestore Cache Error:",
+        error?.code,
+        error?.message || error
+      );
     }
   };
 
-  const fetchGames = async (showLoader: boolean) => {
-    if (showLoader) setLoading(true);
+  // ==========================================================
+  // FILTER GAMES LOCALLY
+  //
+  // This is FAST because there is:
+  // - NO RAWG request
+  // - NO Firestore request
+  //
+  // It simply filters an existing array.
+  // ==========================================================
+
+  const filterGames = (
+    games: any[],
+    genres = selectedGenres,
+    tags = selectedTags,
+    platforms = selectedPlatforms
+  ) => {
+    return games.filter(
+      (game) => {
+        const gameGenres =
+          game.genres ||
+          (game.genre
+            ? [game.genre]
+            : []);
+
+        const gameTags =
+          game.tags || [];
+
+        const gamePlatforms =
+          game.platforms || [];
+
+        // Selected genres use AND matching.
+        //
+        // Action + RPG means the game must
+        // contain BOTH Action AND RPG.
+
+        const matchesGenres =
+          genres.length === 0 ||
+          genres.every(
+            (genre) =>
+              gameGenres.includes(
+                genre
+              )
+          );
+
+        // Multiplayer + Co-op means
+        // both tags must exist.
+
+        const matchesTags =
+          tags.length === 0 ||
+          tags.every(
+            (tag) =>
+              gameTags.includes(
+                tag
+              )
+          );
+
+        // PC + PlayStation means
+        // game must exist on both.
+
+        const matchesPlatforms =
+          platforms.length === 0 ||
+          platforms.every(
+            (platform) =>
+              gamePlatforms.includes(
+                platform
+              )
+          );
+
+        return (
+          matchesGenres &&
+          matchesTags &&
+          matchesPlatforms
+        );
+      }
+    );
+  };
+
+  // ==========================================================
+  // FETCH HOME GAMES
+  // ==========================================================
+
+  const fetchGames = async (
+    pageNum: number,
+    initial = false
+  ) => {
+    setLoading(true);
+
     try {
-      // ✅ Using HTTPS for production APK stability
-      const response = await fetch("https://www.freetogame.com/api/games");
-      const data = await response.json();
-      
-      // ✅ Update Cache for next launch
-      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(data));
-      
-      setAllGames(data);
-      applyFilters(search, selectedCategory, data);
+      const apiKey =
+        process.env.EXPO_PUBLIC_RAWG_API_KEY;
+
+      if (!apiKey) {
+        console.error(
+          "RAWG API key missing"
+        );
+
+        return;
+      }
+
+      const response =
+        await fetch(
+          `https://api.rawg.io/api/games?key=${apiKey}&page=${pageNum}&page_size=40&ordering=-rating`
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `RAWG error: ${response.status}`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      const formatted =
+        (
+          data.results || []
+        ).map(
+          formatRawgGame
+        );
+
+      const combined =
+        initial
+          ? formatted
+          : [
+              ...allGames,
+              ...formatted,
+            ];
+
+      // Remove duplicates by RAWG ID
+
+      const uniqueGames =
+        Array.from(
+          new Map(
+            combined.map(
+              (game) => [
+                game.id.toString(),
+                game,
+              ]
+            )
+          ).values()
+        );
+
+      setAllGames(
+        uniqueGames
+      );
+
+      // Only modify visible home results
+      // if user isn't currently searching.
+
+      if (
+        search.trim() === ""
+      ) {
+        const filtered =
+          filterGames(
+            uniqueGames
+          );
+
+        setFilteredGames(
+          filtered
+        );
+      }
+
+      // Keep first 100 locally
+
+      const cache =
+        uniqueGames.slice(
+          0,
+          100
+        );
+
+      await AsyncStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify(
+          cache
+        )
+      );
+
+      // Fire-and-forget Firestore caching.
+      // Don't make Home wait for this.
+
+      saveToGlobalCache(
+        formatted
+      );
     } catch (error) {
-      console.error("API Fetch Error:", error);
+      console.error(
+        "Fetch Error:",
+        error
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Search History ---
-  const loadSearchHistory = async () => {
-    const saved = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
-    if (saved) setHistory(JSON.parse(saved));
-  };
+  // ==========================================================
+  // SEARCH INPUT
+  // ==========================================================
 
-  const saveSearch = async (term: string) => {
-    if (!term.trim()) return;
-    const cleanTerm = term.trim().toLowerCase();
-    const newHistory = [cleanTerm, ...history.filter((h) => h !== cleanTerm)].slice(0, 5);
-    setHistory(newHistory);
-    await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
-  };
+  const handleSearch = (
+    text: string
+  ) => {
+    setSearch(text);
 
-  // --- Filter & Search Logic ---
-  const applyFilters = (searchText: string, category: string, data = allGames) => {
-    let result = data;
-    if (category !== "All") {
-      result = result.filter((game) => game.genre.toLowerCase() === category.toLowerCase());
-    }
-    if (searchText.trim() !== "") {
-      result = result.filter((game) =>
-        game.title.toLowerCase().includes(searchText.toLowerCase())
+    if (
+      searchTimeout.current
+    ) {
+      clearTimeout(
+        searchTimeout.current
       );
     }
-    setFilteredGames(result);
+
+    const normalized =
+      text.trim();
+
+    // ========================================================
+    // EMPTY SEARCH
+    // ========================================================
+
+    if (
+      normalized.length === 0
+    ) {
+      // Invalidate older API requests
+
+      searchRequestId.current++;
+
+      setSearchResults([]);
+
+      // Apply filters instantly
+      // against home games
+
+      setFilteredGames(
+        filterGames(
+          allGames
+        )
+      );
+
+      setLoading(false);
+
+      return;
+    }
+
+    // ========================================================
+    // 1-2 CHARACTER SEARCH
+    //
+    // Search locally only.
+    // Don't waste API requests.
+    // ========================================================
+
+    if (
+      normalized.length < 3
+    ) {
+      searchRequestId.current++;
+
+      const localResults =
+        allGames.filter(
+          (game) =>
+            game.title
+              ?.toLowerCase()
+              .includes(
+                normalized.toLowerCase()
+              )
+        );
+
+      setFilteredGames(
+        filterGames(
+          localResults
+        )
+      );
+
+      setLoading(false);
+
+      return;
+    }
+
+    // ========================================================
+    // DEBOUNCE API SEARCH
+    // ========================================================
+
+    searchTimeout.current =
+      setTimeout(
+        () => {
+          performSearch(
+            normalized
+          );
+        },
+        400
+      );
   };
 
-  const renderGameItem = ({ item }: { item: any }) => (
-    <Pressable 
-      style={styles.gameCard} 
-      onPress={() => router.push({ pathname: "/details", params: { id: item.id } })}
+  // ==========================================================
+  // SEARCH FIRESTORE + RAWG
+  //
+  // IMPORTANT:
+  //
+  // Network search happens ONLY when search text changes.
+  //
+  // Changing filters DOES NOT call this function.
+  // ==========================================================
+
+  const performSearch = async (
+    searchText: string
+  ) => {
+    const requestId =
+      ++searchRequestId.current;
+
+    setLoading(true);
+
+    try {
+      const normalized =
+        searchText
+          .trim()
+          .toLowerCase();
+
+      // ======================================================
+      // FIRESTORE SEARCH
+      // ======================================================
+
+      let firestoreGames:
+        any[] = [];
+
+      try {
+        const q = query(
+          collection(
+            db,
+            "global_games"
+          ),
+
+          where(
+            "searchName",
+            ">=",
+            normalized
+          ),
+
+          where(
+            "searchName",
+            "<=",
+            normalized +
+              "\uf8ff"
+          ),
+
+          limit(40)
+        );
+
+        const snapshot =
+          await getDocs(q);
+
+        firestoreGames =
+          snapshot.docs.map(
+            (document) =>
+              document.data()
+          );
+      } catch (error) {
+        console.error(
+          "Firestore Search Error:",
+          error
+        );
+      }
+
+      // ======================================================
+      // RAWG SEARCH
+      // ======================================================
+
+      let rawgGames:
+        any[] = [];
+
+      const apiKey =
+        process.env.EXPO_PUBLIC_RAWG_API_KEY;
+
+      if (apiKey) {
+        try {
+          const response =
+            await fetch(
+              `https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(
+                searchText
+              )}&page_size=40`
+            );
+
+          if (!response.ok) {
+            throw new Error(
+              `RAWG search error: ${response.status}`
+            );
+          }
+
+          const data =
+            await response.json();
+
+          rawgGames =
+            (
+              data.results || []
+            ).map(
+              formatRawgGame
+            );
+        } catch (error) {
+          console.error(
+            "RAWG Search Error:",
+            error
+          );
+        }
+      }
+
+      // ======================================================
+      // IGNORE OLD SEARCH REQUEST
+      // ======================================================
+
+      if (
+        requestId !==
+        searchRequestId.current
+      ) {
+        return;
+      }
+
+      // ======================================================
+      // MERGE
+      // ======================================================
+
+      const merged = [
+        ...firestoreGames,
+        ...rawgGames,
+      ];
+
+      // ======================================================
+      // REMOVE DUPLICATES
+      // ======================================================
+
+      const unique =
+        Array.from(
+          new Map(
+            merged.map(
+              (game) => [
+                game.id.toString(),
+                game,
+              ]
+            )
+          ).values()
+        );
+
+      // ======================================================
+      // SORT SEARCH RESULTS
+      // ======================================================
+
+      const getScore = (
+        title: string
+      ) => {
+        const value =
+          title
+            .toLowerCase()
+            .trim();
+
+        if (
+          value === normalized
+        ) {
+          return 0;
+        }
+
+        if (
+          value.startsWith(
+            normalized
+          )
+        ) {
+          return 1;
+        }
+
+        if (
+          value.includes(
+            normalized
+          )
+        ) {
+          return 2;
+        }
+
+        const words =
+          normalized.split(
+            /\s+/
+          );
+
+        const matchingWords =
+          words.filter(
+            (word) =>
+              value.includes(
+                word
+              )
+          ).length;
+
+        if (
+          matchingWords ===
+          words.length
+        ) {
+          return 3;
+        }
+
+        if (
+          matchingWords > 0
+        ) {
+          return 4;
+        }
+
+        return 5;
+      };
+
+      unique.sort(
+        (
+          a: any,
+          b: any
+        ) =>
+          getScore(
+            a.title || ""
+          ) -
+          getScore(
+            b.title || ""
+          )
+      );
+
+      // ======================================================
+      // STORE RAW SEARCH RESULTS
+      //
+      // These remain untouched by filters.
+      // ======================================================
+
+      setSearchResults(
+        unique
+      );
+
+      // ======================================================
+      // APPLY CURRENT FILTERS LOCALLY
+      // ======================================================
+
+      const filtered =
+        filterGames(
+          unique
+        );
+
+      setFilteredGames(
+        filtered
+      );
+
+      // Cache RAWG results without
+      // blocking visible search results.
+
+      if (
+        rawgGames.length > 0
+      ) {
+        saveToGlobalCache(
+          rawgGames
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Search Error:",
+        error
+      );
+    } finally {
+      if (
+        requestId ===
+        searchRequestId.current
+      ) {
+        setLoading(false);
+      }
+    }
+  };
+
+  // ==========================================================
+  // TOGGLE FILTER
+  // ==========================================================
+
+  const toggleSelection = (
+    item: string,
+
+    selected: string[],
+
+    setter:
+      React.Dispatch<
+        React.SetStateAction<
+          string[]
+        >
+      >
+  ) => {
+    if (
+      selected.includes(
+        item
+      )
+    ) {
+      setter(
+        selected.filter(
+          (value) =>
+            value !== item
+        )
+      );
+    } else {
+      setter([
+        ...selected,
+        item,
+      ]);
+    }
+  };
+
+  // ==========================================================
+  // APPLY FILTERS
+  //
+  // FAST:
+  //
+  // NO RAWG request
+  // NO Firestore request
+  //
+  // Only filters arrays already in memory.
+  // ==========================================================
+
+  const handleApplyFilters =
+    () => {
+      setFilterVisible(
+        false
+      );
+
+      // If searching, filter stored search results.
+      //
+      // Otherwise filter Home games.
+
+      const source =
+        search
+          .trim()
+          .length >= 3
+          ? searchResults
+          : allGames;
+
+      const filtered =
+        filterGames(
+          source
+        );
+
+      setFilteredGames(
+        filtered
+      );
+    };
+
+  // ==========================================================
+  // CLEAR FILTERS
+  // ==========================================================
+
+  const clearFilters = () => {
+    setSelectedGenres([]);
+
+    setSelectedTags([]);
+
+    setSelectedPlatforms([]);
+
+    // Immediately show unfiltered source
+
+    if (
+      search
+        .trim()
+        .length >= 3
+    ) {
+      setFilteredGames(
+        searchResults
+      );
+    } else {
+      setFilteredGames(
+        allGames
+      );
+    }
+  };
+
+  // ==========================================================
+  // LOAD MORE
+  // ==========================================================
+
+  const handleLoadMore =
+    () => {
+      if (
+        !loading &&
+        search.trim() === ""
+      ) {
+        const nextPage =
+          page + 1;
+
+        setPage(
+          nextPage
+        );
+
+        fetchGames(
+          nextPage
+        );
+      }
+    };
+
+  // ==========================================================
+  // QUICK ADD
+  // ==========================================================
+
+  const handleQuickAdd =
+    async (
+      game: any,
+      status: string
+    ) => {
+      if (
+        !auth.currentUser
+      ) {
+        return Alert.alert(
+          "Login Required",
+          "Log in to track games."
+        );
+      }
+
+      try {
+        await setDoc(
+          doc(
+            db,
+            "users",
+            auth.currentUser.uid,
+            "gameStatus",
+            game.id
+          ),
+
+          {
+            status,
+
+            title:
+              game.title,
+
+            thumbnail:
+              game.thumbnail,
+
+            updatedAt:
+              serverTimestamp(),
+          },
+
+          {
+            merge: true,
+          }
+        );
+
+        Alert.alert(
+          "Success",
+          `${game.title} marked as ${status}.`
+        );
+      } catch (error) {
+        console.error(
+          "Quick Add Error:",
+          error
+        );
+      }
+    };
+
+  // ==========================================================
+  // GAME CARD
+  // ==========================================================
+
+  const renderGameItem = ({
+    item,
+  }: {
+    item: any;
+  }) => (
+    <View
+      style={
+        styles.gameCard
+      }
     >
-      {/* ✅ Explicit Dimensions prevent thumbnails from disappearing in APK */}
-      <Image source={{ uri: item.thumbnail }} style={styles.thumbnail} />
-      <View style={styles.gameInfo}>
-        <Text style={styles.gameTitle} numberOfLines={1}>{item.title}</Text>
-        <View style={styles.tag}>
-          <Text style={styles.tagText}>{item.genre}</Text>
+      <Pressable
+        onPress={() =>
+          router.push({
+            pathname:
+              "/details",
+
+            params: {
+              id:
+                item.id,
+            },
+          })
+        }
+      >
+        <Image
+          source={{
+            uri:
+              item.thumbnail,
+          }}
+          style={
+            styles.thumbnail
+          }
+        />
+      </Pressable>
+
+      <View
+        style={
+          styles.gameInfo
+        }
+      >
+        <Text
+          style={
+            styles.gameTitle
+          }
+          numberOfLines={
+            1
+          }
+        >
+          {item.title}
+        </Text>
+
+        <View
+          style={
+            styles.cardFooter
+          }
+        >
+          <View
+            style={
+              styles.tag
+            }
+          >
+            <Text
+              style={
+                styles.tagText
+              }
+            >
+              {item.genre}
+            </Text>
+          </View>
+
+          <View
+            style={
+              styles.quickActions
+            }
+          >
+            <Pressable
+              onPress={() =>
+                handleQuickAdd(
+                  item,
+                  "Playing"
+                )
+              }
+            >
+              <Ionicons
+                name="game-controller-outline"
+                size={16}
+                color="#f5c518"
+              />
+            </Pressable>
+
+            <Pressable
+              onPress={() =>
+                handleQuickAdd(
+                  item,
+                  "Completed"
+                )
+              }
+            >
+              <Ionicons
+                name="checkmark-done"
+                size={16}
+                color="#4CAF50"
+              />
+            </Pressable>
+          </View>
         </View>
       </View>
-    </Pressable>
+    </View>
   );
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.searchHeader}>
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#888" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search games..."
-            placeholderTextColor="#888"
-            value={search}
-            onChangeText={(text) => { setSearch(text); applyFilters(text, selectedCategory); }}
-            onFocus={() => setIsHistoryVisible(true)}
-            onSubmitEditing={() => { saveSearch(search); setIsHistoryVisible(false); Keyboard.dismiss(); }}
+  // ==========================================================
+  // FILTER CHIP
+  // ==========================================================
+
+  const renderChip = (
+    item: string,
+
+    selected: string[],
+
+    setter:
+      React.Dispatch<
+        React.SetStateAction<
+          string[]
+        >
+      >
+  ) => {
+    const active =
+      selected.includes(
+        item
+      );
+
+    return (
+      <Pressable
+        key={
+          item
+        }
+
+        onPress={() =>
+          toggleSelection(
+            item,
+            selected,
+            setter
+          )
+        }
+
+        style={[
+          styles.filterChip,
+
+          active &&
+            styles.filterChipActive,
+        ]}
+      >
+        {active && (
+          <Ionicons
+            name="checkmark"
+            size={14}
+            color="#000"
           />
+        )}
+
+        <Text
+          style={[
+            styles.filterChipText,
+
+            active &&
+              styles.filterChipTextActive,
+          ]}
+        >
+          {item}
+        </Text>
+      </Pressable>
+    );
+  };
+
+  // ==========================================================
+  // FILTER COUNT
+  // ==========================================================
+
+  const activeFilterCount =
+    selectedGenres.length +
+    selectedTags.length +
+    selectedPlatforms.length;
+
+  // ==========================================================
+  // UI
+  // ==========================================================
+
+  return (
+    <View
+      style={
+        styles.container
+      }
+    >
+      {/* SEARCH */}
+
+      <View
+        style={
+          styles.searchHeader
+        }
+      >
+        <View
+          style={
+            styles.searchRow
+          }
+        >
+          <View
+            style={
+              styles.searchContainer
+            }
+          >
+            <Ionicons
+              name="search"
+              size={20}
+              color="#888"
+            />
+
+            <TextInput
+              style={
+                styles.searchInput
+              }
+              placeholder="Search games..."
+              placeholderTextColor="#888"
+              value={
+                search
+              }
+              onChangeText={
+                handleSearch
+              }
+              autoCorrect={
+                false
+              }
+            />
+          </View>
+
+          {/* FILTER BUTTON */}
+
+          <Pressable
+            style={
+              styles.filterButton
+            }
+
+            onPress={() =>
+              setFilterVisible(
+                true
+              )
+            }
+          >
+            <Ionicons
+              name="options-outline"
+              size={22}
+              color="#f5c518"
+            />
+
+            {activeFilterCount >
+              0 && (
+              <View
+                style={
+                  styles.filterBadge
+                }
+              >
+                <Text
+                  style={
+                    styles.filterBadgeText
+                  }
+                >
+                  {
+                    activeFilterCount
+                  }
+                </Text>
+              </View>
+            )}
+          </Pressable>
         </View>
       </View>
 
-      <View style={styles.filterWrapper}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {CATEGORIES.map((cat) => (
-            <Pressable
-              key={cat}
-              onPress={() => { setSelectedCategory(cat); applyFilters(search, cat); }}
-              style={[styles.filterBtn, selectedCategory === cat && styles.filterBtnActive]}
-            >
-              <Text style={[styles.filterBtnText, selectedCategory === cat && styles.filterBtnTextActive]}>{cat}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-      </View>
+      {/* GAME LIST */}
 
-      {loading && allGames.length === 0 ? (
-        <ActivityIndicator size="large" color="#f5c518" style={{ marginTop: 50 }} />
-      ) : (
-        <FlatList
-          data={filteredGames}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderGameItem}
-          numColumns={2} // ✅ Two cards per row
-          columnWrapperStyle={styles.row}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          onRefresh={() => fetchGames(true)} // ✅ Pull-to-refresh
-          refreshing={loading}
-        />
-      )}
+      <FlatList
+        data={
+          filteredGames
+        }
+
+        keyExtractor={(
+          item
+        ) =>
+          item.id.toString()
+        }
+
+        renderItem={
+          renderGameItem
+        }
+
+        numColumns={
+          2
+        }
+
+        columnWrapperStyle={
+          styles.row
+        }
+
+        onEndReached={
+          handleLoadMore
+        }
+
+        onEndReachedThreshold={
+          0.5
+        }
+
+        keyboardShouldPersistTaps="handled"
+
+        ListEmptyComponent={
+          !loading ? (
+            <View
+              style={
+                styles.emptyContainer
+              }
+            >
+              <Ionicons
+                name="game-controller-outline"
+                size={40}
+                color="#555"
+              />
+
+              <Text
+                style={
+                  styles.emptyText
+                }
+              >
+                No games match these filters.
+              </Text>
+            </View>
+          ) : null
+        }
+
+        ListFooterComponent={
+          loading ? (
+            <ActivityIndicator
+              color="#f5c518"
+              style={{
+                margin: 20,
+              }}
+            />
+          ) : null
+        }
+      />
+
+      {/* ===================================================== */}
+      {/* FILTER MODAL */}
+      {/* ===================================================== */}
+
+      <Modal
+        visible={
+          filterVisible
+        }
+
+        animationType="slide"
+
+        transparent={
+          true
+        }
+
+        onRequestClose={() =>
+          setFilterVisible(
+            false
+          )
+        }
+      >
+        <View
+          style={
+            styles.modalOverlay
+          }
+        >
+          <View
+            style={
+              styles.modalContainer
+            }
+          >
+            {/* HEADER */}
+
+            <View
+              style={
+                styles.modalHeader
+              }
+            >
+              <View>
+                <Text
+                  style={
+                    styles.modalTitle
+                  }
+                >
+                  Filter Games
+                </Text>
+
+                <Text
+                  style={
+                    styles.modalSubtitle
+                  }
+                >
+                  Combine genres, tags and platforms
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={() =>
+                  setFilterVisible(
+                    false
+                  )
+                }
+              >
+                <Ionicons
+                  name="close"
+                  size={26}
+                  color="#fff"
+                />
+              </Pressable>
+            </View>
+
+            {/* FILTER OPTIONS */}
+
+            <ScrollView
+              showsVerticalScrollIndicator={
+                false
+              }
+            >
+              {/* GENRES */}
+
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Genres
+              </Text>
+
+              <View
+                style={
+                  styles.chipContainer
+                }
+              >
+                {GENRES.map(
+                  (genre) =>
+                    renderChip(
+                      genre,
+                      selectedGenres,
+                      setSelectedGenres
+                    )
+                )}
+              </View>
+
+              {/* TAGS */}
+
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Tags
+              </Text>
+
+              <View
+                style={
+                  styles.chipContainer
+                }
+              >
+                {TAGS.map(
+                  (tag) =>
+                    renderChip(
+                      tag,
+                      selectedTags,
+                      setSelectedTags
+                    )
+                )}
+              </View>
+
+              {/* PLATFORMS */}
+
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Platforms
+              </Text>
+
+              <View
+                style={
+                  styles.chipContainer
+                }
+              >
+                {PLATFORMS.map(
+                  (platform) =>
+                    renderChip(
+                      platform,
+                      selectedPlatforms,
+                      setSelectedPlatforms
+                    )
+                )}
+              </View>
+            </ScrollView>
+
+            {/* ACTIONS */}
+
+            <View
+              style={
+                styles.modalActions
+              }
+            >
+              <Pressable
+                style={
+                  styles.clearButton
+                }
+
+                onPress={
+                  clearFilters
+                }
+              >
+                <Text
+                  style={
+                    styles.clearButtonText
+                  }
+                >
+                  Clear All
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={
+                  styles.applyButton
+                }
+
+                onPress={
+                  handleApplyFilters
+                }
+              >
+                <Text
+                  style={
+                    styles.applyButtonText
+                  }
+                >
+                  Apply Filters
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#121212", paddingHorizontal: 10 },
-  searchHeader: { marginTop: 60, marginBottom: 15, paddingHorizontal: 10 },
-  searchContainer: { flexDirection: "row", alignItems: "center", backgroundColor: "#1e1e1e", borderRadius: 15, paddingHorizontal: 15, height: 50, borderWidth: 1, borderColor: "#333" },
-  searchInput: { flex: 1, color: "#fff", marginLeft: 10, fontSize: 16 },
-  filterWrapper: { marginBottom: 20, paddingHorizontal: 10 },
-  filterBtn: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, backgroundColor: "#1e1e1e", marginRight: 10, borderWidth: 1, borderColor: "#333" },
-  filterBtnActive: { backgroundColor: "#f5c518", borderColor: "#f5c518" },
-  filterBtnText: { color: "#aaa", fontWeight: "bold", fontSize: 12 },
-  filterBtnTextActive: { color: "#000" },
-  row: { justifyContent: "space-between", paddingHorizontal: 5 },
-  listContent: { paddingBottom: 120 },
-  gameCard: {
-    backgroundColor: "#1e1e1e",
-    borderRadius: 15,
-    marginBottom: 15,
-    flex: 0.48, 
-    borderWidth: 1,
-    borderColor: "#2a2a2a",
-    overflow: "hidden",
-  },
-  thumbnail: { width: "100%", height: 100 },
-  gameInfo: { padding: 10 },
-  gameTitle: { color: "#fff", fontSize: 13, fontWeight: "bold", marginBottom: 5 },
-  tag: { backgroundColor: "rgba(245, 197, 24, 0.1)", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, alignSelf: 'flex-start' },
-  tagText: { color: "#f5c518", fontSize: 9, fontWeight: "bold" },
-});
+// ============================================================
+// STYLES
+// ============================================================
+
+const styles =
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor:
+        "#121212",
+      paddingHorizontal: 10,
+    },
+
+    searchHeader: {
+      marginTop: 60,
+      marginBottom: 15,
+      paddingHorizontal: 10,
+    },
+
+    searchRow: {
+      flexDirection: "row",
+      gap: 10,
+    },
+
+    searchContainer: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor:
+        "#1e1e1e",
+      borderRadius: 15,
+      paddingHorizontal: 15,
+      height: 50,
+      borderWidth: 1,
+      borderColor: "#333",
+    },
+
+    searchInput: {
+      flex: 1,
+      color: "#fff",
+      marginLeft: 10,
+      fontSize: 16,
+    },
+
+    filterButton: {
+      width: 50,
+      height: 50,
+      backgroundColor:
+        "#1e1e1e",
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent:
+        "center",
+      borderWidth: 1,
+      borderColor: "#333",
+    },
+
+    filterBadge: {
+      position:
+        "absolute",
+      top: -5,
+      right: -5,
+      backgroundColor:
+        "#f5c518",
+      borderRadius: 10,
+      minWidth: 20,
+      height: 20,
+      alignItems:
+        "center",
+      justifyContent:
+        "center",
+    },
+
+    filterBadgeText: {
+      color: "#000",
+      fontSize: 11,
+      fontWeight:
+        "bold",
+    },
+
+    row: {
+      justifyContent:
+        "space-between",
+      paddingHorizontal: 5,
+    },
+
+    gameCard: {
+      backgroundColor:
+        "#1e1e1e",
+      borderRadius: 15,
+      marginBottom: 15,
+      flex: 0.48,
+      borderWidth: 1,
+      borderColor:
+        "#2a2a2a",
+      overflow:
+        "hidden",
+    },
+
+    thumbnail: {
+      width: "100%",
+      height: 100,
+    },
+
+    gameInfo: {
+      padding: 8,
+    },
+
+    gameTitle: {
+      color: "#fff",
+      fontSize: 12,
+      fontWeight:
+        "bold",
+      marginBottom: 6,
+    },
+
+    cardFooter: {
+      flexDirection:
+        "row",
+      justifyContent:
+        "space-between",
+      alignItems:
+        "center",
+    },
+
+    tag: {
+      backgroundColor:
+        "rgba(245,197,24,0.1)",
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+
+    tagText: {
+      color: "#f5c518",
+      fontSize: 8,
+      fontWeight:
+        "bold",
+    },
+
+    quickActions: {
+      flexDirection:
+        "row",
+      gap: 12,
+    },
+
+    emptyContainer: {
+      alignItems:
+        "center",
+      justifyContent:
+        "center",
+      paddingTop: 80,
+    },
+
+    emptyText: {
+      color: "#777",
+      marginTop: 12,
+      fontSize: 14,
+    },
+
+    modalOverlay: {
+      flex: 1,
+      backgroundColor:
+        "rgba(0,0,0,0.7)",
+      justifyContent:
+        "flex-end",
+    },
+
+    modalContainer: {
+      backgroundColor:
+        "#181818",
+      height: "80%",
+      borderTopLeftRadius:
+        25,
+      borderTopRightRadius:
+        25,
+      padding: 20,
+    },
+
+    modalHeader: {
+      flexDirection:
+        "row",
+      justifyContent:
+        "space-between",
+      alignItems:
+        "center",
+      marginBottom: 10,
+    },
+
+    modalTitle: {
+      color: "#fff",
+      fontSize: 22,
+      fontWeight:
+        "bold",
+    },
+
+    modalSubtitle: {
+      color: "#777",
+      fontSize: 12,
+      marginTop: 3,
+    },
+
+    sectionTitle: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight:
+        "bold",
+      marginTop: 20,
+      marginBottom: 12,
+    },
+
+    chipContainer: {
+      flexDirection:
+        "row",
+      flexWrap:
+        "wrap",
+      gap: 8,
+    },
+
+    filterChip: {
+      flexDirection:
+        "row",
+      alignItems:
+        "center",
+      gap: 5,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      borderRadius: 20,
+      backgroundColor:
+        "#252525",
+      borderWidth: 1,
+      borderColor: "#444",
+    },
+
+    filterChipActive: {
+      backgroundColor:
+        "#f5c518",
+      borderColor:
+        "#f5c518",
+    },
+
+    filterChipText: {
+      color: "#bbb",
+      fontSize: 12,
+    },
+
+    filterChipTextActive: {
+      color: "#000",
+      fontWeight:
+        "bold",
+    },
+
+    modalActions: {
+      flexDirection:
+        "row",
+      gap: 10,
+      paddingTop: 15,
+    },
+
+    clearButton: {
+      flex: 1,
+      height: 50,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: "#555",
+      alignItems:
+        "center",
+      justifyContent:
+        "center",
+    },
+
+    clearButtonText: {
+      color: "#fff",
+      fontWeight:
+        "bold",
+    },
+
+    applyButton: {
+      flex: 2,
+      height: 50,
+      borderRadius: 12,
+      backgroundColor:
+        "#f5c518",
+      alignItems:
+        "center",
+      justifyContent:
+        "center",
+    },
+
+    applyButtonText: {
+      color: "#000",
+      fontWeight:
+        "bold",
+    },
+  });

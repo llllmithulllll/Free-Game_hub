@@ -77,4 +77,4 @@ const styles = StyleSheet.create({
   chipText: { color: "#fff", fontWeight: "bold" },
   btn: { backgroundColor: "#f5c518", padding: 15, borderRadius: 10, marginTop: 30 },
   btnText: { textAlign: "center", fontWeight: "bold", color: "#000" }
-});
+});""
