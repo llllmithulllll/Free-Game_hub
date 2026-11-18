@@ -1,0 +1,256 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function owns(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function friendshipId(firstUid, secondUid) {
+      return firstUid < secondUid
+        ? firstUid + '__' + secondUid
+        : secondUid + '__' + firstUid;
+    }
+
+    function acceptedFriend(userId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/friendships/$(friendshipId(userId, request.auth.uid)))
+        && get(/databases/$(database)/documents/friendships/$(friendshipId(userId, request.auth.uid))).data.status == 'accepted';
+    }
+
+    function isAtLeast18(userId) {
+      let profile = get(/databases/$(database)/documents/users/$(userId)).data;
+      let dob = profile.dateOfBirth;
+      let today = request.time.date();
+      return dob is timestamp
+        && (dob.year() + 18 < today.year()
+          || (dob.year() + 18 == today.year()
+            && (dob.month() < today.month()
+              || (dob.month() == today.month() && dob.day() <= today.day()))));
+    }
+
+    function validProfile() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'email', 'dateOfBirth', 'createdAt', 'updatedAt'])
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.displayName.size() <= 100
+        && (!('username' in data)
+          || (data.username is string
+            && data.username.matches('^[A-Za-z0-9_]{3,20}$')))
+        && (!('usernameLower' in data)
+          || (data.usernameLower is string
+            && data.usernameLower.matches('^[a-z0-9_]{3,20}$')))
+        && (!('username' in data) || ('usernameLower' in data && data.usernameLower == data.username.lower()))
+        && data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 320
+        && (!('dateOfBirth' in data)
+          || data.dateOfBirth is timestamp
+          || (data.dateOfBirth is string
+            && data.dateOfBirth.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')))
+        && (!('createdAt' in data) || data.createdAt is timestamp)
+        && (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function validPublicProfile() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'updatedAt'])
+        && data.keys().hasAll(['displayName', 'username', 'usernameLower', 'updatedAt'])
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.displayName.size() <= 100
+        && data.username is string
+        && data.username.matches('^[A-Za-z0-9_]{3,20}$')
+        && data.usernameLower is string
+        && data.usernameLower.matches('^[a-z0-9_]{3,20}$')
+        && data.usernameLower == data.username.lower()
+        && data.updatedAt == request.time;
+    }
+
+    function validSocialLinks() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['discordHandle', 'discordUserId', 'signalLink', 'updatedAt'])
+        && data.keys().hasAll(['discordHandle', 'discordUserId', 'signalLink', 'updatedAt'])
+        && data.discordHandle is string
+        && data.discordHandle.size() <= 100
+        && data.discordUserId is string
+        && (data.discordUserId == '' || data.discordUserId.matches('^[0-9]{17,20}$'))
+        && data.signalLink is string
+        && data.signalLink.size() <= 500
+        && (data.signalLink == '' || data.signalLink.matches('^https://signal[.]me/.*$'))
+        && data.updatedAt == request.time;
+    }
+
+    function validPreferences() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['categories', 'sexualContentFilter', 'updatedAt'])
+        && data.keys().hasAll(['categories', 'updatedAt'])
+        && data.categories is list
+        && data.categories.size() <= 6
+        && data.categories.hasOnly(['action', 'shooter', 'mmorpg', 'racing', 'sports', 'strategy'])
+        && (!('sexualContentFilter' in data)
+          || (data.sexualContentFilter is bool
+            && (data.sexualContentFilter || isAtLeast18(request.auth.uid))))
+        && data.updatedAt == request.time;
+    }
+
+    function validLibraryEntry() {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'status', 'title', 'thumbnail', 'updatedAt', 'platforms', 'giveawayUrl'
+        ])
+        && data.keys().hasAll(['status', 'title', 'thumbnail', 'updatedAt'])
+        && data.status in ['Claimed', 'Playing', 'Completed', 'To Play']
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 200
+        && (data.thumbnail == null
+          || (data.thumbnail is string
+            && data.thumbnail.size() <= 2048
+            && data.thumbnail.matches('^https://.*')))
+        && data.updatedAt == request.time
+        && (!('platforms' in data)
+          || data.platforms is string
+          || (data.platforms is list && data.platforms.size() <= 20))
+        && (!('giveawayUrl' in data)
+          || (data.giveawayUrl is string
+            && data.giveawayUrl.size() <= 2048
+            && data.giveawayUrl.matches('^https://.*')));
+    }
+
+    function validGlobalGame(gameId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'id', 'title', 'searchName', 'thumbnail', 'genre', 'genres', 'tags', 'platforms', 'lastUpdated'
+        ])
+        && data.keys().hasAll([
+          'id', 'title', 'searchName', 'thumbnail', 'genre', 'genres', 'tags', 'platforms', 'lastUpdated'
+        ])
+        && gameId.matches('^[0-9]+$')
+        && data.id == gameId
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 200
+        && data.searchName is string
+        && data.searchName.size() > 0
+        && data.searchName.size() <= 200
+        && data.thumbnail is string
+        && data.thumbnail.size() <= 2048
+        && data.thumbnail.matches('^https://.*')
+        && data.genre is string
+        && data.genre.size() <= 100
+        && data.genres is list
+        && data.genres.size() <= 20
+        && data.tags is list
+        && data.tags.size() <= 50
+        && data.platforms is list
+        && data.platforms.size() <= 20
+        && data.lastUpdated == request.time;
+    }
+
+    function validReview() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['text', 'userName', 'userId', 'createdAt'])
+        && data.keys().hasAll(['text', 'userName', 'userId', 'createdAt'])
+        && data.text is string
+        && data.text.size() > 0
+        && data.text.size() <= 2000
+        && data.userName is string
+        && data.userName.size() > 0
+        && data.userName.size() <= 100
+        && data.userId == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow read: if owns(userId);
+      allow create: if owns(userId)
+        && validProfile()
+        && request.resource.data.keys().hasAll(['dateOfBirth'])
+        && request.resource.data.dateOfBirth is timestamp
+        && request.resource.data.keys().hasAll(['username', 'usernameLower'])
+        && request.resource.data.createdAt == request.time;
+      allow update: if owns(userId)
+        && validProfile()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'username', 'usernameLower', 'email', 'dateOfBirth', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+
+      match /preferences/{preferenceId} {
+        allow read: if owns(userId);
+        allow create, update: if owns(userId)
+          && preferenceId == 'data'
+          && validPreferences();
+        allow delete: if false;
+      }
+
+      match /gameStatus/{gameId} {
+        allow read: if owns(userId) || acceptedFriend(userId);
+        allow create, update: if owns(userId) && validLibraryEntry();
+        allow delete: if owns(userId);
+      }
+
+      match /socialLinks/{linksId} {
+        allow read: if owns(userId) || acceptedFriend(userId);
+        allow create, update: if owns(userId) && linksId == 'links' && validSocialLinks();
+        allow delete: if owns(userId) && linksId == 'links';
+      }
+    }
+
+    match /publicProfiles/{userId} {
+      allow read: if signedIn();
+      allow create, update: if owns(userId) && validPublicProfile();
+      allow delete: if false;
+    }
+
+    match /friendships/{pairId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow create: if signedIn()
+        && pairId == friendshipId(request.resource.data.requesterId, request.resource.data.recipientId)
+        && request.resource.data.keys().hasOnly(['members', 'requesterId', 'recipientId', 'status', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['members', 'requesterId', 'recipientId', 'status', 'createdAt', 'updatedAt'])
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.recipientId is string
+        && request.resource.data.recipientId != request.auth.uid
+        && exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.recipientId))
+        && request.resource.data.members is list
+        && request.resource.data.members.size() == 2
+        && request.resource.data.members[0] == request.auth.uid
+        && request.resource.data.members[1] == request.resource.data.recipientId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn()
+        && resource.data.status == 'pending'
+        && resource.data.recipientId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid in resource.data.members;
+    }
+
+    // Public catalog cache. Only signed-in clients can seed bounded,
+    // catalog-shaped records; clients cannot delete shared cache entries.
+    match /global_games/{gameId} {
+      allow read: if true;
+      allow create, update: if signedIn() && validGlobalGame(gameId);
+      allow delete: if false;
+    }
+
+    match /games/{gameId}/reviews/{reviewId} {
+      allow read: if true;
+      allow create: if signedIn() && validReview();
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

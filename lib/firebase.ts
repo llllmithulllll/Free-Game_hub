@@ -1,9 +1,10 @@
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import { getApp, getApps, initializeApp } from "firebase/app";
+import * as FirebaseAuth from "firebase/auth";
 import {
   Auth,
   getAuth,
-  getReactNativePersistence,
+  Persistence,
   initializeAuth
 } from "firebase/auth";
 import {
@@ -11,6 +12,15 @@ import {
   getFirestore,
   initializeFirestore
 } from "firebase/firestore";
+
+// Expo's Android bundle resolves firebase/auth's React Native export. TypeScript
+// resolves the package's browser declarations here, which omit this RN-only
+// helper, so describe that conditional export at the platform boundary.
+const getReactNativePersistence = (
+  FirebaseAuth as typeof FirebaseAuth & {
+    getReactNativePersistence: (storage: typeof ReactNativeAsyncStorage) => Persistence;
+  }
+).getReactNativePersistence;
 
 /* ---------------- CONFIG ---------------- */
 const firebaseConfig = {

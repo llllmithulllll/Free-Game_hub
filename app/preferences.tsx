@@ -36,6 +36,7 @@ export default function Preferences() {
       // ✅ Saves to cloud database
       await setDoc(doc(db, "users", user.uid, "preferences", "data"), {
         categories: selectedCats,
+        sexualContentFilter: true,
         updatedAt: serverTimestamp(),
       }, { merge: true });
       

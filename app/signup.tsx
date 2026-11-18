@@ -1,14 +1,17 @@
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { createUserWithEmailAndPassword, sendEmailVerification, signOut } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword, sendEmailVerification, signOut, updateProfile } from "firebase/auth";
+import { doc, serverTimestamp, setDoc, Timestamp } from "firebase/firestore";
+import { ageFromDateOfBirth } from "@/lib/content-filter";
 import React, { useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false); 
@@ -38,8 +41,18 @@ export default function Signup() {
   };
 
   const handleSignup = async () => {
-    if (!email || !password || !name || !confirmPassword) {
+    if (!email || !password || !name || !username || !confirmPassword || !dateOfBirth) {
       showAlert("Missing Fields", "Please fill in all details to create your account.", "error");
+      return;
+    }
+    const usernameLower = username.trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,20}$/.test(usernameLower)) {
+      showAlert("Invalid Username", "Use 3–20 letters, numbers, or underscores.", "error");
+      return;
+    }
+    const age = ageFromDateOfBirth(dateOfBirth);
+    if (age === null) {
+      showAlert("Check Your Date of Birth", "Enter a real date in YYYY-MM-DD format that is not in the future.", "error");
       return;
     }
     if (password !== confirmPassword) {
@@ -50,12 +63,22 @@ export default function Signup() {
     try {
       setLoading(true);
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(userCredential.user, { displayName: name.trim() });
       await sendEmailVerification(userCredential.user);
 
       await setDoc(doc(db, "users", userCredential.user.uid), {
         displayName: name.trim(),
+        username: username.trim(),
+        usernameLower,
         email: email.toLowerCase(),
+        dateOfBirth: Timestamp.fromDate(new Date(`${dateOfBirth}T00:00:00.000Z`)),
         createdAt: serverTimestamp(),
+      });
+      await setDoc(doc(db, "publicProfiles", userCredential.user.uid), {
+        displayName: name.trim(),
+        username: username.trim(),
+        usernameLower,
+        updatedAt: serverTimestamp(),
       });
 
       await signOut(auth);
@@ -96,7 +119,21 @@ export default function Signup() {
       <Text style={styles.title}>Create Account</Text>
       
       <TextInput placeholder="Full Name" value={name} onChangeText={setName} style={styles.input} placeholderTextColor="#aaa" />
+      <TextInput placeholder="Username" value={username} onChangeText={setUsername} style={styles.input} placeholderTextColor="#aaa" autoCapitalize="none" />
       <TextInput placeholder="Email" value={email} onChangeText={setEmail} style={styles.input} placeholderTextColor="#aaa" keyboardType="email-address" autoCapitalize="none" />
+      <TextInput
+        placeholder="Date of birth (YYYY-MM-DD)"
+        value={dateOfBirth}
+        onChangeText={setDateOfBirth}
+        style={styles.input}
+        placeholderTextColor="#aaa"
+        keyboardType="numbers-and-punctuation"
+        maxLength={10}
+      />
+      <Text style={styles.ageHint}>We calculate your age from your birth date. Sexual-content filtering stays on for under-18 accounts.</Text>
+      {dateOfBirth.length === 10 && ageFromDateOfBirth(dateOfBirth) !== null && (
+        <Text style={styles.ageText}>Age: {ageFromDateOfBirth(dateOfBirth)}</Text>
+      )}
 
       <View style={styles.passwordContainer}>
         <TextInput placeholder="Password" value={password} onChangeText={setPassword} style={styles.passwordInput} secureTextEntry={!showPassword} placeholderTextColor="#aaa" />
@@ -127,6 +164,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#121212", padding: 20, justifyContent: "center" },
   title: { color: "#fff", fontSize: 28, fontWeight: "bold", marginBottom: 30, textAlign: "center" },
   input: { backgroundColor: "#1e1e1e", color: "#fff", padding: 15, borderRadius: 10, marginBottom: 15 },
+  ageText: { color: "#aaa", fontSize: 13, marginTop: -8, marginBottom: 12, marginLeft: 4 },
+  ageHint: { color: "#777", fontSize: 11, lineHeight: 16, marginTop: -8, marginBottom: 10, marginHorizontal: 4 },
   passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: "#1e1e1e", borderRadius: 10, marginBottom: 15 },
   passwordInput: { flex: 1, color: "#fff", padding: 15 },
   eyeIcon: { paddingHorizontal: 15 },

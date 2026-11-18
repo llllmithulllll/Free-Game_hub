@@ -1,13 +1,19 @@
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Head from "expo-router/head";
 import { useRouter } from "expo-router";
+import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
+import { randomizeGames, type DiscoveryState, updateDiscoverySignals } from "@/lib/recommendations";
+import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 
 import {
   collection,
   doc,
   getDocs,
+  getDoc,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -40,6 +46,7 @@ import {
 // ============================================================
 
 const CACHE_KEY = "@cached_games_list";
+const DISCOVERY_KEY = "@game_discovery_state_v1";
 
 const GENRES = [
   "Action",
@@ -84,6 +91,7 @@ export default function Home() {
   // ==========================================================
 
   const [allGames, setAllGames] = useState<any[]>([]);
+  const allGamesRef = useRef<any[]>([]);
 
   // RAWG + Firestore search results are stored separately.
   // Filters can then operate on these results instantly.
@@ -92,6 +100,7 @@ export default function Home() {
   const [filteredGames, setFilteredGames] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [page, setPage] = useState(1);
 
@@ -108,6 +117,11 @@ export default function Home() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [, setContentFilterRevision] = useState(0);
+  const preferredCategoriesRef = useRef<string[]>([]);
+  const filterSexualContentRef = useRef(true);
+  const discoveryState = useRef<DiscoveryState>({ recentIds: [], genreExposure: {} });
+  const hasRecordedDiscovery = useRef(false);
 
   const router = useRouter();
 
@@ -132,19 +146,76 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    let profile: any = {};
+    let preferences: any = {};
+    const refreshPersonalization = () => {
+      const filter = shouldFilterSexualContent(profile.dateOfBirth, preferences.sexualContentFilter);
+      filterSexualContentRef.current = filter;
+      preferredCategoriesRef.current = preferences.categories || [];
+      setContentFilterRevision((revision) => revision + 1);
+      const randomized = randomizeGames(allGamesRef.current, preferredCategoriesRef.current, discoveryState.current);
+      allGamesRef.current = randomized;
+      setAllGames(randomized);
+      setFilteredGames(filter ? randomized.filter((game: any) => !isSexualContentGame(game)) : randomized);
+    };
+    const unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), (snapshot) => {
+      profile = snapshot.exists() ? snapshot.data() : {};
+      refreshPersonalization();
+    });
+    const unsubscribePreferences = onSnapshot(doc(db, "users", user.uid, "preferences", "data"), (snapshot) => {
+      preferences = snapshot.exists() ? snapshot.data() : {};
+      refreshPersonalization();
+    });
+    return () => {
+      unsubscribeProfile();
+      unsubscribePreferences();
+    };
+  }, []);
+
   // ==========================================================
   // INITIALIZE
   // ==========================================================
 
   const initializeData = async () => {
+    let categories: string[] = [];
+    let filter = true;
+    try {
+      const savedDiscovery = await AsyncStorage.getItem(DISCOVERY_KEY);
+      if (savedDiscovery) discoveryState.current = JSON.parse(savedDiscovery);
+    } catch (error) {
+      console.error("Discovery state load error:", error);
+    }
+
+    const user = auth.currentUser;
+    if (user) {
+      try {
+        const [profileSnap, preferencesSnap] = await Promise.all([
+          getDoc(doc(db, "users", user.uid)),
+          getDoc(doc(db, "users", user.uid, "preferences", "data")),
+        ]);
+        const profile = profileSnap.exists() ? profileSnap.data() : {};
+        const preferences = preferencesSnap.exists() ? preferencesSnap.data() : {};
+        categories = preferences.categories || [];
+        filter = shouldFilterSexualContent(profile.dateOfBirth, preferences.sexualContentFilter);
+      } catch (error) {
+        console.error("Content preference load error; using safe filter defaults:", error);
+      }
+    }
+    preferredCategoriesRef.current = categories;
+    filterSexualContentRef.current = filter;
+
     try {
       const cached = await AsyncStorage.getItem(CACHE_KEY);
 
       if (cached) {
         const parsed = JSON.parse(cached);
-
-        setAllGames(parsed);
-        setFilteredGames(parsed);
+        const randomized = randomizeGames(parsed, categories, discoveryState.current);
+        allGamesRef.current = randomized;
+        setAllGames(randomized);
+        setFilteredGames(filter ? randomized.filter((game: any) => !isSexualContentGame(game)) : randomized);
       }
     } catch (error) {
       console.error("Cache Error:", error);
@@ -188,6 +259,8 @@ export default function Home() {
       genres,
 
       tags,
+
+      esrbRating: game.esrb_rating || null,
 
       platforms,
 
@@ -258,10 +331,6 @@ export default function Home() {
 
               lastUpdated:
                 serverTimestamp(),
-            },
-
-            {
-              merge: true,
             }
           );
         }
@@ -295,6 +364,7 @@ export default function Home() {
   ) => {
     return games.filter(
       (game) => {
+        if (filterSexualContentRef.current && isSexualContentGame(game)) return false;
         const gameGenres =
           game.genres ||
           (game.genre
@@ -411,17 +481,29 @@ export default function Home() {
         Array.from(
           new Map(
             combined.map(
-              (game) => [
+              (game: any) => [
                 game.id.toString(),
                 game,
               ]
             )
           ).values()
-        );
+        ) as any[];
 
-      setAllGames(
-        uniqueGames
-      );
+      const existingIds = new Set(allGames.map((game) => String(game.id)));
+      const newlyFetched = uniqueGames.filter((game: any) => !existingIds.has(String(game.id)));
+      const recommendedGames = initial
+        ? randomizeGames(uniqueGames, preferredCategoriesRef.current, discoveryState.current)
+        : [
+            ...allGames,
+            ...randomizeGames(newlyFetched, preferredCategoriesRef.current, discoveryState.current),
+          ];
+      if (initial && !hasRecordedDiscovery.current) {
+        hasRecordedDiscovery.current = true;
+        discoveryState.current = updateDiscoverySignals(discoveryState.current, recommendedGames.slice(0, 12));
+        AsyncStorage.setItem(DISCOVERY_KEY, JSON.stringify(discoveryState.current)).catch(() => {});
+      }
+      setAllGames(recommendedGames);
+      allGamesRef.current = recommendedGames;
 
       // Only modify visible home results
       // if user isn't currently searching.
@@ -431,7 +513,7 @@ export default function Home() {
       ) {
         const filtered =
           filterGames(
-            uniqueGames
+            recommendedGames
           );
 
         setFilteredGames(
@@ -960,6 +1042,22 @@ export default function Home() {
       }
     };
 
+  const handleRefresh = async () => {
+    if (loading || search.trim()) return;
+    setRefreshing(true);
+    hasRecordedDiscovery.current = false;
+    // RAWG's paginated catalog is stable; pulling to refresh rotates to a
+    // different page, then the preference ranker shuffles that fresh batch.
+    let nextPage = Math.floor(Math.random() * 50) + 1;
+    if (nextPage === page) nextPage = (nextPage % 50) + 1;
+    setPage(nextPage);
+    try {
+      await fetchGames(nextPage, true);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   // ==========================================================
   // QUICK ADD
   // ==========================================================
@@ -1024,15 +1122,17 @@ export default function Home() {
 
   const renderGameItem = ({
     item,
+    index = 0,
   }: {
     item: any;
+    index?: number;
   }) => (
-    <View
-      style={
-        styles.gameCard
-      }
+    <Animated.View
+      style={styles.gameCard}
+      entering={FadeInUp.delay(Math.min(index, 6) * 18).duration(210).reduceMotion(ReduceMotion.System)}
     >
       <Pressable
+        style={({ pressed }) => pressed ? styles.gameCardImagePressed : undefined}
         onPress={() =>
           router.push({
             pathname:
@@ -1128,7 +1228,7 @@ export default function Home() {
           </View>
         </View>
       </View>
-    </View>
+    </Animated.View>
   );
 
   // ==========================================================
@@ -1209,11 +1309,19 @@ export default function Home() {
   // ==========================================================
 
   return (
-    <View
-      style={
-        styles.container
-      }
-    >
+    <>
+      <Head>
+        <title>Free-Game Hub | Discover games</title>
+        <meta
+          name="description"
+          content="Discover games, find free giveaways, and keep your game library organized."
+        />
+      </Head>
+      <View
+        style={
+          styles.container
+        }
+      >
       {/* SEARCH */}
 
       <View
@@ -1302,6 +1410,9 @@ export default function Home() {
         data={
           filteredGames
         }
+
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
 
         keyExtractor={(
           item
@@ -1567,7 +1678,8 @@ export default function Home() {
           </View>
         </View>
       </Modal>
-    </View>
+      </View>
+    </>
   );
 }
 

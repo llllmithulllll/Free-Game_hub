@@ -6,10 +6,15 @@ A React Native (Expo) app for discovering games, tracking your personal game lib
 
 - **Auth** — email/password sign-up and login via Firebase Auth, with a required email-verification step before login is allowed.
 - **Onboarding preferences** — new users pick favorite categories (Action, Shooter, MMORPG, Racing, Sports, Strategy) right after verifying their email.
+- **Age-aware discovery** — signup collects a date of birth and derives age; sexual-content-tagged titles are filtered for under-18 users, while adults can control the filter in Profile.
+- **Personalized game discovery** — favorite categories and locally remembered genre impressions influence a randomized feed, with recently surfaced games down-ranked.
+- **Social profiles** — find players by username, send and accept friend requests, and view friends’ libraries, current games, and reviews.
+- **Notifications** — opt-in friend-request alerts and platform-filtered giveaway alerts; giveaway checks run while the app is open. Alerts use local device notifications.
+- **External messaging** — optional Discord details and personal Signal profile links are shown only to accepted friends; messages open in those services, with no in-app chat storage.
 - **Home** — browse and search a large game catalog (powered by RAWG), filter by category, quick-add games to *Playing* or *Completed* straight from the grid.
 - **Giveaways** — live feed of free game/DLC giveaways (powered by GamerPower), filterable by platform and type, with one-tap claim tracking and sharing.
 - **Game details** — screenshots, PC requirements, community rating breakdown, an in-app review thread, and linked Reddit discussions for each game.
-- **Profile** — your library organized into collapsible sections (Claimed, Playing, Completed, Backlog), with inline status changes and removal.
+- **Profile** — edit your details on a dedicated page; open My Games as a full library page with status filters, game cards, and quick status actions; pull-to-refresh discovery.
 
 ## Tech stack
 
@@ -47,9 +52,12 @@ firestore.rules               Security rules for all collections used by the app
 
 | Collection | Purpose | Written by |
 |---|---|---|
-| `users/{uid}` | Profile doc (display name, email, createdAt) | Client (signup) |
-| `users/{uid}/preferences/data` | Selected categories | Client (preferences screen) |
-| `users/{uid}/gameStatus/{gameId}` | Per-user library entries (status, thumbnail, etc.) | Client |
+| `users/{uid}` | Profile doc (display name, email, date of birth, createdAt) | Client (signup) |
+| `users/{uid}/preferences/data` | Selected categories and sexual-content filter | Client (preferences/profile) |
+| `users/{uid}/gameStatus/{gameId}` | Per-user library entries (owner writes; accepted friends can read) | Client |
+| `users/{uid}/socialLinks/links` | Private Discord and Signal details (owner writes; accepted friends can read) | Client |
+| `publicProfiles/{uid}` | Searchable display name and username; excludes email and date of birth | Client |
+| `friendships/{pairId}` | Pending and accepted friend relationships | Client |
 | `global_games/{gameId}` | Shared cache of games seen across all users, powering fast search | Client (batched writes) |
 | `games/{gameId}/reviews/{reviewId}` | In-app user reviews | Client |
 
@@ -75,7 +83,7 @@ Values come from Firebase Console (Project Settings → your web app config) and
 ### 2. Firebase project
 
 - Create a Firebase project, enable **Authentication → Email/Password**, and enable **Cloud Firestore**.
-- Paste the contents of `firestore.rules` into Firestore → Rules and publish. Every collection the app touches is scoped to the signed-in user except `global_games` (shared, any signed-in user can write) and public read-only reviews.
+- Deploy the checked-in Firestore rules with `firebase deploy --only firestore:rules` (or paste `firestore.rules` into Firestore → Rules and publish). User profiles, preferences, and library entries are scoped to their owner. The catalog cache and reviews are publicly readable; only signed-in users can seed catalog records or post reviews.
 - No Blaze (pay-as-you-go) plan is required for the app itself — everything here runs on Firestore's free Spark tier.
 
 ### 3. Install and run
@@ -102,4 +110,5 @@ eas build --profile development --platform android
 ## Known limitations
 
 - Firestore offline persistence is **not** enabled — the JS SDK's persistence APIs are web-only (they depend on IndexedDB), so this app runs online-only. Real offline support would require switching to `@react-native-firebase/firestore`.
+- Notifications currently check for new giveaways and friend requests while the app is active. Delivering alerts while the app is closed requires a trusted scheduled backend to check GamerPower and send remote push notifications.
 - Home's search checks the shared `global_games` cache first, then falls back to RAWG's live search API for anything not yet cached — so very new or low-rated titles may take a moment to appear the first time anyone searches for them, after which they're cached for everyone.

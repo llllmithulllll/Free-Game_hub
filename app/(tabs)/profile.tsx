@@ -1,40 +1,38 @@
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import {
   signOut,
   updateEmail,
   updatePassword,
-  updateProfile,
 } from "firebase/auth";
 
 import {
   collection,
-  deleteDoc,
   doc,
   getDoc,
   onSnapshot,
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
   where,
 } from "firebase/firestore";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { ageFromDateOfBirth, dateOfBirthFromStorage } from "@/lib/content-filter";
+import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
-  Image,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  Switch,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -72,13 +70,6 @@ export default function Profile() {
   // COLLAPSIBLE SECTIONS
   // ==========================================================
 
-  const [expanded, setExpanded] = useState({
-    claimed: true,
-    playing: true,
-    completed: false,
-    backlog: false,
-  });
-
   // ==========================================================
   // PROFILE
   // ==========================================================
@@ -87,8 +78,6 @@ export default function Profile() {
     auth.currentUser?.displayName || "Gamer"
   );
 
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [updatingName, setUpdatingName] = useState(false);
 
   // ==========================================================
   // PREFERENCES
@@ -100,6 +89,23 @@ export default function Profile() {
   const [preferencesVisible, setPreferencesVisible] = useState(false);
   const [loadingPreferences, setLoadingPreferences] = useState(true);
   const [savingPreferences, setSavingPreferences] = useState(false);
+  const [dateOfBirth, setDateOfBirth] = useState<string | null>(null);
+  const [sexualContentFilter, setSexualContentFilter] = useState(true);
+  const isUnder18OrUnknown = !dateOfBirth || (ageFromDateOfBirth(dateOfBirth) ?? 0) < 18;
+
+  useFocusEffect(useCallback(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    Promise.all([
+      getDoc(doc(db, "users", user.uid)),
+      getDoc(doc(db, "users", user.uid, "preferences", "data")),
+    ]).then(([snapshot, preferences]) => {
+      const data = snapshot.exists() ? snapshot.data() : {};
+      setUserName(data.displayName || user.displayName || "Gamer");
+      setDateOfBirth(dateOfBirthFromStorage(data.dateOfBirth) || null);
+      setSexualContentFilter(preferences.exists() ? preferences.data().sexualContentFilter !== false : true);
+    }).catch((error) => console.error("Profile refresh failed:", error));
+  }, []));
 
   // ==========================================================
   // ACCOUNT SETTINGS
@@ -155,7 +161,14 @@ export default function Profile() {
 
           setSelectedCats(categories);
           setTempSelectedCats(categories);
+          setSexualContentFilter(snap.data().sexualContentFilter !== false);
         }
+
+        const profileSnap = await getDoc(doc(db, "users", user.uid));
+        const profileData = profileSnap.exists() ? profileSnap.data() : {};
+        const dob = profileData.dateOfBirth;
+        setDateOfBirth(dateOfBirthFromStorage(dob) || null);
+        setUserName(profileData.displayName || user.displayName || "Gamer");
       } catch (error) {
         console.error(
           "Preference Load Error:",
@@ -254,153 +267,8 @@ export default function Profile() {
   }, []);
 
   // ==========================================================
-  // UPDATE GAME STATUS
-  // ==========================================================
-
-  const handleUpdateStatus = async (
-    id: string,
-    newStatus: string
-  ) => {
-    const user = auth.currentUser;
-
-    if (!user) {
-      return;
-    }
-
-    try {
-      const gameRef = doc(
-        db,
-        "users",
-        user.uid,
-        "gameStatus",
-        id
-      );
-
-      await updateDoc(gameRef, {
-        status: newStatus,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (error) {
-      console.error(
-        "Update Status Error:",
-        error
-      );
-
-      Alert.alert(
-        "Error",
-        "Could not update game status."
-      );
-    }
-  };
-
-  // ==========================================================
-  // REMOVE GAME
-  // ==========================================================
-
-  const handleRemove = (
-    id: string,
-    title: string
-  ) => {
-    const user = auth.currentUser;
-
-    if (!user) {
-      return;
-    }
-
-    Alert.alert(
-      "Remove Game",
-      `Are you sure you want to remove ${title}?`,
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Remove",
-          style: "destructive",
-
-          onPress: async () => {
-            try {
-              await deleteDoc(
-                doc(
-                  db,
-                  "users",
-                  user.uid,
-                  "gameStatus",
-                  id
-                )
-              );
-            } catch (error) {
-              Alert.alert(
-                "Error",
-                "Could not remove the game."
-              );
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  // ==========================================================
   // UPDATE DISPLAY NAME
   // ==========================================================
-
-  const handleSaveName = async () => {
-    const user = auth.currentUser;
-
-    if (
-      !user ||
-      userName.trim() === ""
-    ) {
-      return;
-    }
-
-    setUpdatingName(true);
-
-    try {
-      await updateProfile(user, {
-        displayName: userName.trim(),
-      });
-
-      await setDoc(
-        doc(
-          db,
-          "users",
-          user.uid
-        ),
-        {
-          displayName:
-            userName.trim(),
-
-          updatedAt:
-            serverTimestamp(),
-        },
-        {
-          merge: true,
-        }
-      );
-
-      setIsEditingName(false);
-
-      Alert.alert(
-        "Profile Updated",
-        "Your display name has been updated."
-      );
-    } catch (error) {
-      console.error(
-        "Name Update Error:",
-        error
-      );
-
-      Alert.alert(
-        "Error",
-        "Failed to update profile name."
-      );
-    } finally {
-      setUpdatingName(false);
-    }
-  };
 
   // ==========================================================
   // UPDATE EMAIL
@@ -692,6 +560,8 @@ export default function Profile() {
             categories:
               tempSelectedCats,
 
+            sexualContentFilter,
+
             updatedAt:
               serverTimestamp(),
           },
@@ -730,24 +600,21 @@ export default function Profile() {
       }
     };
 
-  // ==========================================================
-  // COLLAPSIBLE SECTION
-  // ==========================================================
-
-  const toggleSection = (
-    section:
-      keyof typeof expanded
-  ) => {
-    setExpanded(
-      (previous) => ({
-        ...previous,
-
-        [section]:
-          !previous[
-            section
-          ],
-      })
-    );
+  const handleToggleSexualContentFilter = async (enabled: boolean) => {
+    const user = auth.currentUser;
+    if (!user || (isUnder18OrUnknown && !enabled)) return;
+    const nextValue = isUnder18OrUnknown ? true : enabled;
+    setSexualContentFilter(nextValue);
+    try {
+      await setDoc(
+        doc(db, "users", user.uid, "preferences", "data"),
+        { categories: selectedCats, sexualContentFilter: nextValue, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    } catch {
+      setSexualContentFilter(!nextValue);
+      Alert.alert("Error", "Could not update content filtering.");
+    }
   };
 
   // ==========================================================
@@ -785,129 +652,6 @@ export default function Profile() {
       ]
     );
   };
-
-  // ==========================================================
-  // GAME CARD
-  // ==========================================================
-
-  const renderGameCard = ({
-    item,
-  }: {
-    item: any;
-  }) => (
-    <View style={styles.card}>
-      <Pressable
-        onPress={() =>
-          router.push({
-            pathname:
-              "/details",
-
-            params: {
-              id:
-                item.id,
-            },
-          })
-        }
-      >
-        <Image
-          source={{
-            uri:
-              item.thumbnail,
-          }}
-          style={
-            styles.thumb
-          }
-        />
-      </Pressable>
-
-      <Text
-        style={
-          styles.cardTitle
-        }
-        numberOfLines={1}
-      >
-        {item.title}
-      </Text>
-
-      <View
-        style={
-          styles.cardActions
-        }
-      >
-        <TouchableOpacity
-          style={
-            styles.gameActionButton
-          }
-          onPress={() =>
-            handleUpdateStatus(
-              item.id,
-              "Playing"
-            )
-          }
-        >
-          <Ionicons
-            name="play"
-            size={15}
-            color="#f5c518"
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={
-            styles.gameActionButton
-          }
-          onPress={() =>
-            handleUpdateStatus(
-              item.id,
-              "Completed"
-            )
-          }
-        >
-          <Ionicons
-            name="checkmark-done"
-            size={15}
-            color="#4CAF50"
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={
-            styles.gameActionButton
-          }
-          onPress={() =>
-            handleUpdateStatus(
-              item.id,
-              "To Play"
-            )
-          }
-        >
-          <Ionicons
-            name="bookmark-outline"
-            size={15}
-            color="#4da6ff"
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={
-            styles.gameActionButton
-          }
-          onPress={() =>
-            handleRemove(
-              item.id,
-              item.title
-            )
-          }
-        >
-          <Ionicons
-            name="trash-outline"
-            size={15}
-            color="#ff4444"
-          />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
 
   // ==========================================================
   // STATS
@@ -957,70 +701,7 @@ export default function Profile() {
               styles.headerInfo
             }
           >
-            {isEditingName ? (
-              <View
-                style={
-                  styles.editRow
-                }
-              >
-                <TextInput
-                  style={
-                    styles.nameInput
-                  }
-                  value={
-                    userName
-                  }
-                  onChangeText={
-                    setUserName
-                  }
-                  autoFocus
-                />
-
-                <TouchableOpacity
-                  onPress={
-                    handleSaveName
-                  }
-                >
-                  {updatingName ? (
-                    <ActivityIndicator
-                      size="small"
-                      color="#f5c518"
-                    />
-                  ) : (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={27}
-                      color="#f5c518"
-                    />
-                  )}
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={
-                  styles.nameRow
-                }
-                onPress={() =>
-                  setIsEditingName(
-                    true
-                  )
-                }
-              >
-                <Text
-                  style={
-                    styles.userName
-                  }
-                >
-                  {userName}
-                </Text>
-
-                <Ionicons
-                  name="pencil"
-                  size={15}
-                  color="#f5c518"
-                />
-              </TouchableOpacity>
-            )}
+            <Text style={styles.userName}>{userName}</Text>
 
             <Text
               style={
@@ -1103,17 +784,13 @@ export default function Profile() {
             styles.settingsCard
           }
         >
-          {/* DISPLAY NAME */}
+          {/* EDIT PROFILE */}
 
           <TouchableOpacity
             style={
               styles.settingsRow
             }
-            onPress={() =>
-              setIsEditingName(
-                true
-              )
-            }
+            onPress={() => router.push("/edit-profile")}
           >
             <View
               style={
@@ -1137,7 +814,7 @@ export default function Profile() {
                   styles.settingsTitle
                 }
               >
-                Display Name
+                Edit Profile
               </Text>
 
               <Text
@@ -1145,7 +822,7 @@ export default function Profile() {
                   styles.settingsSubtitle
                 }
               >
-                {userName}
+                Name, age, username and social links
               </Text>
             </View>
 
@@ -1278,6 +955,31 @@ export default function Profile() {
             }
           />
 
+          <View style={styles.settingsRow}>
+            <View style={styles.settingsIcon}>
+              <Ionicons name="eye-off-outline" size={20} color="#f5c518" />
+            </View>
+            <View style={styles.settingsTextContainer}>
+              <Text style={styles.settingsTitle}>Hide sexual content</Text>
+              <Text style={styles.settingsSubtitle}>
+                {isUnder18OrUnknown ? "Always on for under-18 or unknown age" : "Filter games tagged with sexual content"}
+              </Text>
+            </View>
+            <Switch
+              value={sexualContentFilter || isUnder18OrUnknown}
+              onValueChange={handleToggleSexualContentFilter}
+              disabled={isUnder18OrUnknown || loadingPreferences}
+              trackColor={{ false: "#444", true: "#a98712" }}
+              thumbColor={sexualContentFilter ? "#f5c518" : "#aaa"}
+            />
+          </View>
+
+          <View
+            style={
+              styles.separator
+            }
+          />
+
           {/* LOGOUT */}
 
           <TouchableOpacity
@@ -1403,70 +1105,26 @@ export default function Profile() {
         >
           My Games
         </Text>
-
-        <CollapsibleSection
-          title="Claimed Games 🎁"
-          data={claimed}
-          isOpen={
-            expanded.claimed
-          }
-          onToggle={() =>
-            toggleSection(
-              "claimed"
-            )
-          }
-          render={
-            renderGameCard
-          }
-        />
-
-        <CollapsibleSection
-          title="Currently Playing 🎮"
-          data={playing}
-          isOpen={
-            expanded.playing
-          }
-          onToggle={() =>
-            toggleSection(
-              "playing"
-            )
-          }
-          render={
-            renderGameCard
-          }
-        />
-
-        <CollapsibleSection
-          title="Completed 🏆"
-          data={completed}
-          isOpen={
-            expanded.completed
-          }
-          onToggle={() =>
-            toggleSection(
-              "completed"
-            )
-          }
-          render={
-            renderGameCard
-          }
-        />
-
-        <CollapsibleSection
-          title="To Play (Backlog) 📂"
-          data={backlog}
-          isOpen={
-            expanded.backlog
-          }
-          onToggle={() =>
-            toggleSection(
-              "backlog"
-            )
-          }
-          render={
-            renderGameCard
-          }
-        />
+        <Animated.View entering={FadeInUp.duration(220).reduceMotion(ReduceMotion.System)}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open My Games. ${totalGames} saved, ${playing.length} currently playing.`}
+            onPress={() => router.push("/my-games")}
+            style={({ pressed }) => [styles.libraryCard, pressed && styles.libraryCardPressed]}
+          >
+            <View style={styles.libraryIcon}>
+              <Ionicons name="game-controller" size={25} color="#111" />
+            </View>
+            <View style={styles.libraryCardText}>
+              <Text style={styles.libraryCardTitle}>Open your library</Text>
+              <Text style={styles.libraryCardSubtitle}>
+                {totalGames} saved · {playing.length} playing now
+              </Text>
+              <Text style={styles.libraryCardMeta}>Browse by status, update or remove games</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={21} color="#f5c518" />
+          </Pressable>
+        </Animated.View>
 
         <View
           style={{
@@ -1941,84 +1599,6 @@ const StatItem = ({
 );
 
 // ============================================================
-// COLLAPSIBLE SECTION
-// ============================================================
-
-const CollapsibleSection = ({
-  title,
-  data,
-  isOpen,
-  onToggle,
-  render,
-}: any) => (
-  <View
-    style={
-      styles.section
-    }
-  >
-    <TouchableOpacity
-      style={
-        styles.sectionHeader
-      }
-      onPress={
-        onToggle
-      }
-    >
-      <Text
-        style={
-          styles.sectionTitle
-        }
-      >
-        {title} ({data.length})
-      </Text>
-
-      <Ionicons
-        name={
-          isOpen
-            ? "chevron-up"
-            : "chevron-down"
-        }
-        size={18}
-        color="#f5c518"
-      />
-    </TouchableOpacity>
-
-    {isOpen && (
-      <FlatList
-        horizontal
-        data={
-          data
-        }
-        renderItem={
-          render
-        }
-        keyExtractor={(
-          item
-        ) =>
-          item.id.toString()
-        }
-        showsHorizontalScrollIndicator={
-          false
-        }
-        ListEmptyComponent={
-          <Text
-            style={
-              styles.empty
-            }
-          >
-            Empty section
-          </Text>
-        }
-        contentContainerStyle={{
-          paddingLeft: 15,
-          paddingBottom: 15,
-        }}
-      />
-    )}
-  </View>
-);
-
-// ============================================================
 // STYLES
 // ============================================================
 
@@ -2230,69 +1810,29 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  // GAME SECTIONS
-
-  section: {
-    backgroundColor: "#1e1e1e",
-    borderRadius: 12,
-    marginBottom: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#292929",
-  },
-
-  sectionHeader: {
+  libraryCard: {
+    minHeight: 92,
     flexDirection: "row",
-    justifyContent: "space-between",
-    padding: 16,
     alignItems: "center",
-    backgroundColor: "#252525",
+    gap: 12,
+    padding: 14,
+    marginBottom: 18,
+    borderRadius: 16,
+    backgroundColor: "#1e1e1e",
+    borderWidth: 1,
+    borderColor: "#303030",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.14,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
   },
-
-  sectionTitle: {
-    color: "#f5c518",
-    fontSize: 14,
-    fontWeight: "bold",
-  },
-
-  card: {
-    marginRight: 15,
-    width: 125,
-    paddingVertical: 10,
-  },
-
-  thumb: {
-    width: 125,
-    height: 75,
-    borderRadius: 8,
-    backgroundColor: "#333",
-  },
-
-  cardTitle: {
-    color: "#fff",
-    fontSize: 10,
-    marginTop: 6,
-    fontWeight: "600",
-  },
-
-  cardActions: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginTop: 8,
-    borderTopWidth: 0.5,
-    borderTopColor: "#444",
-    paddingTop: 7,
-  },
-
-  gameActionButton: {
-    padding: 4,
-  },
-
-  empty: {
-    color: "#555",
-    fontSize: 12,
-    padding: 20,
-  },
+  libraryCardPressed: { backgroundColor: "#252525", transform: [{ scale: 0.99 }] },
+  libraryIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: "#f5c518", alignItems: "center", justifyContent: "center" },
+  libraryCardText: { flex: 1 },
+  libraryCardTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
+  libraryCardSubtitle: { color: "#f5c518", fontSize: 12, fontWeight: "700", marginTop: 4 },
+  libraryCardMeta: { color: "#888", fontSize: 10, marginTop: 5 },
 
   // MODAL
 

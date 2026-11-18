@@ -1,18 +1,44 @@
 import { auth, db } from "@/lib/firebase";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as Notifications from "expo-notifications";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Platform, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
+  const root = segments[0];
+  const route = segments[1];
+  const isAuthenticatedAppRoute =
+    root === "(tabs)" ||
+    ["preferences", "details", "edit-profile", "friend-profile", "my-games"].includes(root ?? "");
 
-  const [loading, setLoading] = useState(true);
-  const [isAuthReady, setIsAuthReady] = useState(false); // New state to track stability
+  useEffect(() => {
+    const openNotificationRoute = (notification: Notifications.Notification) => {
+      const url = notification.request.content.data?.url;
+      if (typeof url === "string") router.push(url as never);
+    };
+    const lastResponse = Notifications.getLastNotificationResponse();
+    if (lastResponse?.notification) openNotificationRoute(lastResponse.notification);
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      openNotificationRoute(response.notification);
+    });
+    return () => subscription.remove();
+  }, [router]);
+  const isPublicWebRoute =
+    Platform.OS === "web" &&
+    ((root === "(tabs)" && (!route || ["index", "free_now"].includes(route))) ||
+      root === "details");
+
+  // Public discovery routes render during web static generation. Private
+  // routes and native screens still wait for Firebase's auth state.
+  const [loading, setLoading] = useState(!isPublicWebRoute);
+  const [isAuthReady, setIsAuthReady] = useState(isPublicWebRoute);
 
   // Tracks which signed-in user we've already fetched preferences for, so we
   // don't re-hit Firestore on every navigation (useSegments() returns a new
@@ -22,14 +48,27 @@ export default function RootLayout() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      const root = segments[0];
-
       if (!user) {
         lastCheckedUid.current = null;
-        // Only redirect to login if we are not already on an auth screen
-        if (root !== "login" && root !== "signup") {
+        // Allow visitors to browse games, details, and giveaways on the web.
+        // Account features remain behind the existing login gate.
+        if (
+          !isPublicWebRoute &&
+          root !== "login" &&
+          root !== "signup"
+        ) {
           router.replace("/login");
         }
+        setLoading(false);
+        setIsAuthReady(true);
+        return;
+      }
+
+      // Firebase briefly signs a newly-created account in before signup
+      // sends verification and signs it back out. Keep signup on its own
+      // screen during that transient auth event; onboarding starts after a
+      // verified user explicitly logs in.
+      if (root === "signup") {
         setLoading(false);
         setIsAuthReady(true);
         return;
@@ -70,7 +109,7 @@ export default function RootLayout() {
           }
         } else {
           // If prefs exist and they are stuck on auth/loading screens, move to tabs
-          if (root !== "(tabs)" && root !== "preferences") {
+          if (!isAuthenticatedAppRoute) {
             router.replace("/(tabs)");
           }
         }
@@ -83,20 +122,28 @@ export default function RootLayout() {
     });
 
     return unsubscribe;
-  }, [segments]); // Keep segments to re-run logic on navigation
+  }, [isPublicWebRoute, isAuthenticatedAppRoute, root, segments, router]);
 
   if (loading || !isAuthReady) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#121212" }}>
-        <ActivityIndicator size="large" color="#f5c518" />
-      </View>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#121212" }}>
+          <ActivityIndicator size="large" color="#f5c518" />
+        </View>
+      </GestureHandlerRootView>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#121212" }}>
-      <StatusBar style="light" />
-      <Stack screenOptions={{ headerShown: false }} />
-    </SafeAreaView>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#121212" }}>
+        <StatusBar style="light" />
+        <Stack screenOptions={{
+          headerShown: false,
+          animation: "slide_from_right",
+          animationDuration: 220,
+        }} />
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }

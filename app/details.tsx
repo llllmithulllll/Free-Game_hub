@@ -1,4 +1,5 @@
 import { auth, db } from "@/lib/firebase";
+import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import {
@@ -34,6 +35,7 @@ export default function Details() {
   const [userReview, setUserReview] = useState("");
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<string | null>(null);
+  const [contentBlocked, setContentBlocked] = useState(false);
 
   const cleanHtml = (text: string) => {
     if (!text) return "";
@@ -59,10 +61,33 @@ export default function Details() {
   async function fetchDetails() {
     try {
       setLoading(true);
+      setContentBlocked(false);
       const apiKey = process.env.EXPO_PUBLIC_RAWG_API_KEY;
       
       const res = await fetch(`https://api.rawg.io/api/games/${id}?key=${apiKey}`);
       const data = await res.json();
+
+      let hideSexualContent = true;
+      if (auth.currentUser) {
+        const [profileSnap, preferencesSnap] = await Promise.all([
+          getDoc(doc(db, "users", auth.currentUser.uid)),
+          getDoc(doc(db, "users", auth.currentUser.uid, "preferences", "data")),
+        ]);
+        hideSexualContent = shouldFilterSexualContent(
+          profileSnap.exists() ? profileSnap.data().dateOfBirth : null,
+          preferencesSnap.exists() ? preferencesSnap.data().sexualContentFilter : undefined,
+        );
+      }
+      if (hideSexualContent && isSexualContentGame({
+        name: data.name,
+        description_raw: data.description_raw,
+        genres: data.genres,
+        tags: data.tags,
+        esrb_rating: data.esrb_rating,
+      })) {
+        setContentBlocked(true);
+        return;
+      }
       
       const screenRes = await fetch(`https://api.rawg.io/api/games/${id}/screenshots?key=${apiKey}`);
       const screenData = await screenRes.json();
@@ -97,17 +122,6 @@ export default function Details() {
 
       setGame(gameObj);
 
-      // ✅ GLOBAL BACKEND CACHE STORAGE
-      // Seed the global database so this game appears in searches for others
-      await setDoc(doc(db, "global_games", id as string), {
-        id: id as string,
-        title: gameObj.title,
-        searchName: gameObj.title.toLowerCase(),
-        thumbnail: gameObj.thumbnail,
-        genre: gameObj.firstGenre,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-
       if (auth.currentUser) {
         const snap = await getDoc(doc(db, "users", auth.currentUser.uid, "gameStatus", id as string));
         if (snap.exists()) setStatus(snap.data().status);
@@ -124,6 +138,7 @@ export default function Details() {
     await addDoc(collection(db, "games", id as string, "reviews"), {
       text: userReview,
       userName: auth.currentUser.displayName || "Gamer",
+      userId: auth.currentUser.uid,
       createdAt: serverTimestamp(),
     });
     setUserReview("");
@@ -144,7 +159,17 @@ export default function Details() {
     setStatus(newStatus);
   };
 
-  if (loading || !game) return <ActivityIndicator style={{ flex: 1 }} color="#f5c518" />;
+  if (loading) return <ActivityIndicator style={{ flex: 1 }} color="#f5c518" />;
+  if (contentBlocked) {
+    return (
+      <View style={[styles.container, { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 }]}>
+        <Ionicons name="eye-off-outline" size={42} color="#f5c518" />
+        <Text style={[styles.sectionTitle, { textAlign: "center", marginTop: 16 }]}>This game is hidden by your content filter</Text>
+        <Text style={[styles.meta, { textAlign: "center", marginTop: 8 }]}>You can manage the sexual-content filter in Profile settings.</Text>
+      </View>
+    );
+  }
+  if (!game) return <ActivityIndicator style={{ flex: 1 }} color="#f5c518" />;
 
   return (
     <ScrollView style={styles.container}>
