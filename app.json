@@ -31,6 +31,14 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow GamePal to let you choose an optional profile picture or GIF.",
+          "microphonePermission": false,
+          "cameraPermission": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/gamepal/logo-pack/png/gamepal-logo-color-transparent-1024.png",

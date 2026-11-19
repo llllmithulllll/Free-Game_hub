@@ -30,8 +30,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
-type FriendEntry = { uid: string; displayName: string; username: string; avatarId?: string; avatarPreviewUrl?: string; avatarUrl?: string; status: string; requesterId: string; recipientId: string };
-type SearchEntry = { uid: string; displayName: string; username: string; usernameLower: string; avatarId?: string; avatarPreviewUrl?: string; avatarUrl?: string };
+type FriendEntry = { uid: string; displayName: string; username: string; avatarUrl?: string; status: string; requesterId: string; recipientId: string };
+type SearchEntry = { uid: string; displayName: string; username: string; usernameLower: string; avatarUrl?: string };
 
 export default function Friends() {
   useAppTheme();
@@ -132,8 +132,6 @@ export default function Friends() {
           uid: otherUid,
           displayName: profile.displayName || "Gamer",
           username: profile.username || "",
-          avatarId: profile.avatarId || "",
-          avatarPreviewUrl: profile.avatarPreviewUrl || profile.avatarUrl || "",
           avatarUrl: profile.avatarUrl || "",
           status: data.status,
           requesterId: data.requesterId,
@@ -231,7 +229,7 @@ export default function Friends() {
   const renderFriend = (entry: FriendEntry) => (
     <View key={entry.uid} style={styles.personRow}>
       <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-        <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
+        <ProfileAvatar uri={entry.avatarUrl} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
         <View style={{ flex: 1 }}>
           <Text style={styles.personName}>{entry.displayName}</Text>
           <Text style={styles.personUsername}>@{entry.username}</Text>
@@ -269,7 +267,7 @@ export default function Friends() {
         return (
           <View key={person.uid} style={styles.personRow}>
             <View style={styles.personDetails}>
-              <ProfileAvatar uri={person.avatarPreviewUrl || person.avatarUrl} gifId={person.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
+              <ProfileAvatar uri={person.avatarUrl} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
               <View style={{ flex: 1 }}><Text style={styles.personName}>{person.displayName}</Text><Text style={styles.personUsername}>@{person.username}</Text></View>
             </View>
             {relationship?.status === "accepted" ? <Text style={styles.stateText}>Friends</Text>
@@ -285,7 +283,7 @@ export default function Friends() {
       {incoming.map((entry) => (
         <View key={entry.uid} style={styles.personRow}>
           <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-            <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
+            <ProfileAvatar uri={entry.avatarUrl} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
             <View style={{ flex: 1 }}><Text style={styles.personName}>{entry.displayName}</Text><Text style={styles.personUsername}>@{entry.username}</Text></View>
           </Pressable>
           <Pressable style={styles.smallButton} onPress={() => acceptRequest(entry)}><Text style={styles.smallButtonText}>Accept</Text></Pressable>
@@ -297,7 +295,7 @@ export default function Friends() {
       {outgoing.map((entry) => (
         <View key={entry.uid} style={styles.personRow}>
           <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-            <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
+            <ProfileAvatar uri={entry.avatarUrl} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
             <View style={{ flex: 1 }}><Text style={styles.personName}>{entry.displayName}</Text><Text style={styles.personUsername}>@{entry.username}</Text></View>
           </Pressable>
           <Text style={styles.stateText}>Pending</Text>

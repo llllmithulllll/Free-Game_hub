@@ -1,19 +1,23 @@
-const TENOR_BASE = "https://tenor.googleapis.com/v2";
-const TENOR_MEDIA_HOST = "https://media.tenor.com/";
 const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
-function json(data, status, origin) {
-  return new Response(JSON.stringify(data), {
+function response(data, status, origin, extraHeaders = {}) {
+  return new Response(data, {
     status,
     headers: {
-      "content-type": "application/json; charset=utf-8",
+      ...(typeof data === "string" ? { "content-type": "application/json; charset=utf-8" } : {}),
       "access-control-allow-origin": origin || "*",
-      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
       "access-control-allow-headers": "authorization, content-type",
       "vary": "Origin",
-      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      ...extraHeaders,
     },
   });
+}
+
+function json(data, status, origin) {
+  return response(JSON.stringify(data), status, origin, { "cache-control": "no-store" });
 }
 
 function decodeBase64Url(value) {
@@ -28,100 +32,130 @@ async function firebaseSigningKeys() {
   if (!response) {
     response = await fetch(FIREBASE_JWKS_URL);
     if (!response.ok) throw new Error("Could not load Firebase signing keys.");
-    const cachedResponse = new Response(await response.clone().text(), {
+    await cache.put(cacheKey, new Response(await response.clone().text(), {
       headers: { "content-type": "application/json", "cache-control": "public, max-age=3600" },
-    });
-    await cache.put(cacheKey, cachedResponse);
+    }));
   }
   return response.json();
 }
 
-async function verifyFirebaseToken(request, projectId) {
+async function verifyFirebaseUser(request, projectId) {
   const authorization = request.headers.get("authorization") || "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return null;
   try {
     const header = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[0])));
     const claims = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
     const now = Math.floor(Date.now() / 1000);
-    if (header.alg !== "RS256" || typeof header.kid !== "string") return false;
-    if (claims.aud !== projectId || claims.iss !== `https://securetoken.google.com/${projectId}`) return false;
-    if (typeof claims.sub !== "string" || claims.sub.length === 0
-      || typeof claims.exp !== "number" || claims.exp <= now
-      || typeof claims.iat !== "number" || claims.iat > now) return false;
+    if (header.alg !== "RS256" || typeof header.kid !== "string") return null;
+    if (claims.aud !== projectId || claims.iss !== `https://securetoken.google.com/${projectId}`) return null;
+    if (typeof claims.sub !== "string" || !claims.sub || typeof claims.exp !== "number" || claims.exp <= now
+      || typeof claims.iat !== "number" || claims.iat > now) return null;
     let keys = await firebaseSigningKeys();
     let jwk = keys.keys?.find((key) => key.kid === header.kid);
     if (!jwk) {
-      // Refresh the cached key set once to handle key rotation.
       await caches.default.delete(new Request(FIREBASE_JWKS_URL));
       keys = await firebaseSigningKeys();
       jwk = keys.keys?.find((key) => key.kid === header.kid);
     }
-    if (!jwk) return false;
-    const publicKey = await crypto.subtle.importKey(
-      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
-    );
-    return crypto.subtle.verify(
-      "RSASSA-PKCS1-v1_5", publicKey, decodeBase64Url(parts[2]),
-      new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
-    );
+    if (!jwk) return null;
+    const publicKey = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, decodeBase64Url(parts[2]), new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
+    return valid ? claims.sub : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function extractGif(item) {
-  const previewUrl = item.media_formats?.tinygif?.url;
-  const url = item.media_formats?.gif?.url;
-  if (!item.id || !previewUrl?.startsWith(TENOR_MEDIA_HOST) || !url?.startsWith(TENOR_MEDIA_HOST)) return null;
-  return { id: String(item.id), title: String(item.title || "Animated GIF").slice(0, 100), previewUrl, url };
+function detectImageType(bytes) {
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 && (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61) return { mime: "image/gif", extension: "gif" };
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return { mime: "image/png", extension: "png" };
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { mime: "image/jpeg", extension: "jpg" };
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return { mime: "image/webp", extension: "webp" };
+  return null;
+}
+
+function safeAvatarKey(key) {
+  return typeof key === "string" && /^[A-Za-z0-9_-]{1,128}\/[a-f0-9-]{36}\.(jpg|png|gif|webp)$/.test(key);
+}
+
+async function readLimitedBody(request) {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_AVATAR_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const buffer = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buffer;
 }
 
 export default {
   async fetch(request, env) {
-    const requestOrigin = request.headers.get("origin") || "";
-    const allowedOrigins = (env.ALLOWED_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean);
-    if (requestOrigin && !allowedOrigins.includes(requestOrigin)) return json({ error: "Origin not allowed." }, 403, requestOrigin);
-    if (request.method === "OPTIONS") return json({}, 200, requestOrigin);
-    if (request.method !== "POST") return json({ error: "POST required." }, 405, requestOrigin);
-    if (!env.TENOR_API_KEY || !env.FIREBASE_PROJECT_ID) return json({ error: "GIF service is not configured." }, 503, requestOrigin);
-    if (!await verifyFirebaseToken(request, env.FIREBASE_PROJECT_ID)) return json({ error: "Sign-in required." }, 401, requestOrigin);
+    const origin = request.headers.get("origin") || "";
+    const allowedOrigins = (env.ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean);
+    if (origin && !allowedOrigins.includes(origin)) return json({ error: "Origin not allowed." }, 403, origin);
+    if (request.method === "OPTIONS") return json({}, 200, origin);
 
-    const path = new URL(request.url).pathname;
-    let data;
-    try {
-      data = await request.json();
-    } catch {
-      return json({ error: "Invalid JSON." }, 400, requestOrigin);
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (request.method === "GET" && path.startsWith("/avatar/")) {
+      if (!env.AVATARS) return json({ error: "Avatar storage is not configured." }, 503, origin);
+      const key = path.slice("/avatar/".length);
+      if (!safeAvatarKey(key)) return json({ error: "Invalid avatar path." }, 400, origin);
+      const object = await env.AVATARS.get(key);
+      if (!object) return json({ error: "Avatar not found." }, 404, origin);
+      return response(object.body, 200, origin, {
+        "content-type": object.httpMetadata?.contentType || "application/octet-stream",
+        "cache-control": "public, max-age=31536000, immutable",
+        "etag": object.httpEtag,
+      });
     }
 
-    const params = new URLSearchParams({ key: env.TENOR_API_KEY, client_key: "gamepal", media_filter: "tinygif,gif" });
-    let endpoint;
-    if (path.endsWith("/search")) {
-      const query = typeof data.query === "string" ? data.query.trim().slice(0, 60) : "";
-      if (query.length < 2) return json({ error: "Enter at least two characters." }, 400, requestOrigin);
-      params.set("q", query);
-      params.set("limit", "24");
-      params.set("contentfilter", "high");
-      endpoint = `${TENOR_BASE}/search?${params}`;
-    } else if (path.endsWith("/resolve")) {
-      const ids = Array.isArray(data.ids) ? [...new Set(data.ids.filter((id) => typeof id === "string" && id.length > 0 && id.length <= 80))].slice(0, 50) : [];
-      if (!ids.length) return json([], 200, requestOrigin);
-      params.set("ids", ids.join(","));
-      endpoint = `${TENOR_BASE}/posts?${params}`;
-    } else {
-      return json({ error: "Unknown endpoint." }, 404, requestOrigin);
+    if (!env.FIREBASE_PROJECT_ID) return json({ error: "Avatar service is not configured." }, 503, origin);
+    const uid = await verifyFirebaseUser(request, env.FIREBASE_PROJECT_ID);
+    if (!uid) return json({ error: "Sign-in required." }, 401, origin);
+    if (!env.AVATARS) return json({ error: "Avatar storage is not configured." }, 503, origin);
+
+    if (request.method === "POST" && path === "/upload") {
+      const declaredSize = Number(request.headers.get("content-length") || 0);
+      if (declaredSize > MAX_AVATAR_BYTES) return json({ error: "Choose an image or GIF smaller than 5 MB." }, 413, origin);
+      const bytes = await readLimitedBody(request);
+      if (!bytes || bytes.byteLength === 0) return json({ error: "Choose an image or GIF smaller than 5 MB." }, 413, origin);
+      const type = detectImageType(bytes);
+      const declaredType = (request.headers.get("content-type") || "").split(";")[0].toLowerCase();
+      if (!type || declaredType !== type.mime) return json({ error: "Only valid JPEG, PNG, WebP, and GIF files are supported." }, 415, origin);
+      const key = `${uid}/${crypto.randomUUID()}.${type.extension}`;
+      await env.AVATARS.put(key, bytes, {
+        httpMetadata: { contentType: type.mime, cacheControl: "public, max-age=31536000, immutable" },
+        customMetadata: { ownerUid: uid },
+      });
+      return json({ key, url: `${url.origin}/avatar/${key}` }, 201, origin);
     }
 
-    try {
-      const tenorResponse = await fetch(endpoint, { signal: AbortSignal.timeout(10_000) });
-      if (!tenorResponse.ok) return json({ error: "GIF search is temporarily unavailable." }, 502, requestOrigin);
-      const payload = await tenorResponse.json();
-      const results = (payload.results || []).map(extractGif).filter(Boolean);
-      return json(results, 200, requestOrigin);
-    } catch {
-      return json({ error: "GIF search is temporarily unavailable." }, 502, requestOrigin);
+    if (request.method === "POST" && path === "/delete") {
+      let data;
+      try { data = await request.json(); } catch { return json({ error: "Invalid JSON." }, 400, origin); }
+      const key = data?.key;
+      if (!safeAvatarKey(key) || !key.startsWith(`${uid}/`)) return json({ error: "Invalid avatar key." }, 400, origin);
+      await env.AVATARS.delete(key);
+      return json({ ok: true }, 200, origin);
     }
+
+    return json({ error: "Unknown endpoint." }, 404, origin);
   },
 };

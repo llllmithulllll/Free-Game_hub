@@ -31,10 +31,10 @@ Core product areas:
 - PC compatibility: manual desktop/laptop CPU, GPU, and RAM profile; FPSHQ search/forecasts; profile settings and onboarding entry.
 - Appearance: light/dark/auto, Classic/Xbox/PlayStation/Nintendo/Neon/RGB palettes, themed cards/alerts, animated background marks, and active-tab icon tilt.
 - Brand assets: animated loading marks, colored GamePal wordmark in the Home header, and a colored controller-only app icon without the wordmark. `app.json` references the correct assets; Android generated launcher files are local/ignored and should be regenerated with Expo prebuild on another checkout.
-- Animated GIF profile pictures: Tenor search/results/selection/editing, shared on profile/friend cards, stored by GIF ID, and resolved through a free Cloudflare Worker. The Tenor key stays in Cloudflare secrets; no Firebase Blaze functions are used.
-- Firestore rules for private PC specs, library giveaway types, public avatar IDs, and social access are maintained in `firestore.rules`.
+- Optional profile picture upload: users may choose a photo or animated GIF, change it later, remove it, or skip it entirely. A Firebase-authenticated Cloudflare Worker stores files in R2 and serves them to profiles/friends; Tenor is no longer used.
+- Firestore rules for private PC specs, library giveaway types, optional avatar URLs/keys, and social access are maintained in `firestore.rules`.
 
-This branch contains source-level implementation. The project owner deployed the GIF Worker (URL and validation steps are documented in `gif-worker/README.md`). No complete Android release build or Firebase Console rules publish was completed by the assistant.
+This branch contains source-level implementation. The owner previously deployed the Tenor version of the Worker; the current source needs an R2 bucket and redeploy. No complete Android release build or Firebase Console rules publish was completed by the assistant.
 
 ## 3. Current repository and secrets
 
@@ -117,9 +117,9 @@ Expo Router’s main entry is `expo-router/entry` (see `package.json`). Importan
 | `lib/local-notifications.ts` | Notification permissions/settings/delivery |
 | `lib/game-catalog.ts` | RAWG search for claimed offer titles |
 | `lib/social.ts` | Stable relationship document ID |
-| `lib/gif-avatars.ts` | Authenticated GIF search and batched URL resolution through the Cloudflare Worker |
-| `gif-worker/src/index.js` | Firebase ID-token validation and Tenor API proxy; key is stored as a Worker secret |
-| `components/ProfileAvatar.tsx` | Animated GIF avatar display and URL refresh |
+| `lib/profile-avatars.ts` | Authenticated local image/GIF upload and owned-file deletion through the Worker |
+| `gif-worker/src/index.js` | Firebase ID-token validation, image signature/size checks, R2 upload/delete, and public avatar reads |
+| `components/ProfileAvatar.tsx` | Optional uploaded avatar display, with a fallback icon |
 | `firestore.rules` | Full rules source |
 | `firebase.json` | Points Firestore deployment to `firestore.rules` |
 
@@ -133,7 +133,7 @@ Recent Console errors (historical):
 
 1. An earlier line-96/EOF parser error was in `validPreferences()` around the optional `sexualContentFilter` expression.
 2. A subsequent full paste had one extra closing parenthesis at line 98 and a cascading `Unexpected '}'` around line 256.
-The current rules include `giveawayType` validation for library entries, CPU/GPU profile validation, social/friendship access, and public-profile validation for Tenor avatar IDs. The Worker architecture stores the GIF ID rather than a long-lived Tenor media URL. Optional URL fields remain supported for compatibility, but newly saved avatars use `avatarId` and `avatarProvider: 'tenor'`.
+The current rules include `giveawayType` validation for library entries, CPU/GPU profile validation, social/friendship access, and optional avatar URL/key validation. New avatars use `avatarProvider: 'upload'`; the URL is hosted by the upload Worker and the random storage key is scoped to the owner. Users may omit the avatar fields entirely.
 
 The line-96/EOF and line-98 errors were from previous pasted versions; the current local `firestore.rules` was rewritten with explicitly grouped avatar checks. The Firebase CLI is not installed here, so the rules have not been compiled with the Firebase Rules parser. The owner must publish the latest whole `firestore.rules` file in Firebase Console (or deploy with Firebase CLI) before testing saves. Do not replace these rules with open `allow read, write` rules.
 
@@ -172,8 +172,8 @@ Debug APKs may require Metro; use a successful release APK to launch independent
 - **Claimed offer opens an unrelated game:** `lib/game-catalog.ts` now rejects weak/ambiguous matches instead of defaulting to the first RAWG result. The My Games screen shows a safe no-match message. Verify against claims with editions, abbreviations, DLC titles, and similarly named sequels.
 - **RAWG query has a platform suffix:** claimed-offer lookup strips common trailing platform labels such as `(PC)`, `(Steam)`, PS5, Xbox and Nintendo Switch before the RAWG request and match scoring.
 - **PC FPS data:** FPSHQ lookup is live in the optional PC compatibility route. Verify GPU/CPU autocomplete and a measured and a predicted game forecast on web and Android; verify Firestore save only after rules are published. No FPSHQ API key is needed. Catalog-wide filtering remains outstanding.
-- **GIF profile search previously showed `FirebaseError: not-found`:** that was because the Firebase callable had not been deployed. To avoid Blaze billing, the app now calls a Cloudflare Worker at `EXPO_PUBLIC_GIF_API_URL`; the Worker validates Firebase ID tokens and keeps `TENOR_API_KEY` as a Cloudflare secret. The owner deployed it at `https://gamepal-gif-search.thakurmithlesh988.workers.dev`. Wrangler secrets are encrypted and intentionally cannot be read back; re-run `wrangler secret put NAME` to replace one. Verify both `TENOR_API_KEY` and `FIREBASE_PROJECT_ID` are set on this Worker, set the non-secret `EXPO_PUBLIC_GIF_API_URL` in the local app `.env`, restart Expo, then test GIF search while signed in.
-- **GIF selection and sharing:** Edit Profile lists Tenor results, previews/selects one, requires a GIF before saving, and allows changing it later. Public profiles store the Tenor GIF ID; `ProfileAvatar` resolves current URLs via a batched Worker endpoint with a 20-hour in-memory cache. Friend/profile cards use the same component. Content search uses Tenor's high safety filter and includes attribution in the picker.
+- **GIF profile search previously showed `FirebaseError: not-found`:** Tenor stopped accepting new API clients in January 2026, so search was removed. The app now permits optional local photo/GIF uploads through `EXPO_PUBLIC_AVATAR_API_URL`. The owner deployed the old Worker at `https://gamepal-gif-search.thakurmithlesh988.workers.dev`; it must be redeployed from this branch after creating the `gamepal-avatars` R2 bucket and setting only `FIREBASE_PROJECT_ID`. No `TENOR_API_KEY` is needed. R2 has a monthly free allowance, but activating its subscription and usage above the allowance can incur charges; see `gif-worker/README.md` before activation.
+- **Profile picture requirement:** The route gate no longer forces avatar selection. Profile pictures are optional; Edit Profile offers change/remove and allows saving without an avatar. The Worker limits uploads to 5 MB and JPEG/PNG/WebP/GIF signatures. Publish updated `firestore.rules`, set `EXPO_PUBLIC_AVATAR_API_URL`, and test uploads with an authenticated account.
 - **App icon still showed GAME HUB:** Expo config and adaptive icon assets now use the colored controller mark without wordmark. Android launcher resource changes in this workspace are under the ignored `/android` output; run the prebuild command above before building a new APK on another checkout.
 - **Game shelves were empty / scrollbar looked native:** Home category grouping and layout were revised; no recent browser QA was performed.
 - **Profile edit unmatched route / app startup issues:** profile editor route and root route gating have been updated historically; test after generating a current APK.

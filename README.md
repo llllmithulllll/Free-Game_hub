@@ -15,7 +15,7 @@ For a categorized list of changes on this branch, see [CHANGELOG.md](CHANGELOG.m
 - Maintain a library of games marked Playing, To Play, Completed, or Claimed. Claimed DLC has its own library filter. Tapping a claimed offer searches RAWG by title and opens the catalog detail page.
 - Create an account with date of birth, choose onboarding preferences after login, and apply the age-aware sexual-content filter.
 - Search players by username, send/accept friend requests, view accepted friends’ profiles and libraries, and open external Discord/Signal contact links.
-- Select a required animated Tenor GIF avatar during first profile setup; avatars are shown on profiles and in friend/search lists. Search runs through a free Cloudflare Worker that verifies Firebase sign-in tokens and keeps the Tenor API key server-side.
+- Optionally upload a profile photo or animated GIF from the device/browser. Files are validated and uploaded through a Firebase-authenticated Cloudflare Worker to R2, then shown on profiles and friend/search lists. No external GIF search or Tenor API key is used.
 - Enable local notifications for friend requests and platform-filtered new giveaways. These checks currently run while the app is active.
 - Browse on mobile and desktop layouts. The web storefront includes subtle entry/hover/press animations and honors `prefers-reduced-motion`.
 - Use the colored controller-only GamePal icon, without a wordmark, as the app mark; the selected navigation icon tilts slightly when its page is active.
@@ -28,7 +28,7 @@ For a categorized list of changes on this branch, see [CHANGELOG.md](CHANGELOG.m
 | Routing | Expo Router 6 (file-based) |
 | Language | TypeScript |
 | Authentication and database | Firebase Auth, Cloud Firestore |
-| GIF avatar search | Tenor API through Firebase-authenticated Cloudflare Worker |
+| User-uploaded avatars | Cloudflare Worker + R2 object storage |
 | Local preference/cache storage | AsyncStorage |
 | Game catalog and detail data | RAWG API |
 | Free offers | GamerPower API |
@@ -45,7 +45,7 @@ app/
   preferences.tsx             Post-login preference onboarding
   pc-compatibility.tsx        Private hardware profile and FPS lookup
   details.tsx                 RAWG game detail page
-  edit-profile.tsx            Profile editing and required Tenor GIF avatar selection
+  edit-profile.tsx            Profile editing and optional photo/GIF upload
   friend-profile.tsx           Accepted friend profile/library
   my-games.tsx                 Personal game library and status filters
   (tabs)/
@@ -60,9 +60,10 @@ lib/
   local-notifications.ts       Local notification helpers/settings
   game-catalog.ts              RAWG title lookup used for claimed offers
   pc-performance.ts            FPSHQ API calls and one-hour local cache
+  profile-avatars.ts           Authenticated upload/delete calls to the avatar Worker
   social.ts                    Stable friendship document ID helper
 firestore.rules                Firestore security and data validation rules
-gif-worker/src/index.js        Free Worker proxy; verifies Firebase ID tokens
+gif-worker/src/index.js        Avatar Worker; verifies Firebase ID tokens and uses R2
 firebase.json                 Maps Firestore deployment to firestore.rules
 ```
 
@@ -83,7 +84,7 @@ EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 EXPO_PUBLIC_FIREBASE_APP_ID=
 EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID=
 EXPO_PUBLIC_RAWG_API_KEY=
-EXPO_PUBLIC_GIF_API_URL=
+EXPO_PUBLIC_AVATAR_API_URL=https://gamepal-gif-search.thakurmithlesh988.workers.dev
 ```
 
 Use the Firebase web app configuration and a RAWG API key. Expo embeds `EXPO_PUBLIC_*` values into builds, so treat distributable APKs as containing those client configuration values. Do not put server credentials or private admin keys in this file.
@@ -129,7 +130,7 @@ Collections used by the app:
 | `users/{uid}/gameStatus/{gameId}` | Personal game library; giveaway claims include `giveawayType` |
 | `users/{uid}/socialLinks/links` | Private Discord/Signal contact information |
 | `users/{uid}/pcProfile/specs` | Private PC hardware profile (CPU/GPU/RAM and forecast settings) |
-| `publicProfiles/{uid}` | Searchable display name/username and selected Tenor GIF ID, without email or date of birth |
+| `publicProfiles/{uid}` | Searchable display name/username and optional uploaded avatar URL/key, without email or date of birth |
 | `friendships/{pairId}` | Pending/accepted relationships |
 | `global_games/{gameId}` | Shared catalog cache |
 | `games/{gameId}/reviews/{reviewId}` | Game reviews |
@@ -138,7 +139,7 @@ Existing accounts become discoverable after they open Friends in the updated app
 
 After changing `firestore.rules`, paste the entire file into **Firebase Console → Firestore Database → Rules** and click **Publish**, or deploy with Firebase CLI after configuring the project. A local rules edit does not update the live database.
 
-GIF avatar search uses a Cloudflare Worker so it works with Firebase Spark and does not require Firebase Blaze. Follow [gif-worker/README.md](gif-worker/README.md) to deploy it. Never put the Tenor API key in the Expo `.env`. The Worker verifies Firebase ID tokens and uses Tenor's high content filter; the app stores only the selected GIF ID and resolves current URLs in memory for less than 24 hours.
+Profile photos/GIFs are optional. Uploads use a Cloudflare Worker backed by R2 because Firebase Storage requires Blaze for new buckets. Follow [gif-worker/README.md](gif-worker/README.md) to activate R2, create the bucket, deploy the Worker, and set `EXPO_PUBLIC_AVATAR_API_URL`. R2 currently includes monthly free usage, but enabling it requires subscription/billing activation and usage above the free allowance is billed. No Tenor API key or GIF-search service is needed. The Worker verifies Firebase ID tokens for uploads and deletes, validates file types and size, and serves selected avatar files through the same Worker URL.
 
 ## Known limitations
 

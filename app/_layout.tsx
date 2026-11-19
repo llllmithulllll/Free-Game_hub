@@ -60,7 +60,6 @@ function RootNavigator() {
   // array reference on every route change, which used to re-run this whole
   // check each time).
   const lastCheckedUid = useRef<string | null>(null);
-  const avatarSetupCheckedUid = useRef<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -93,22 +92,6 @@ function RootNavigator() {
       // Already validated this user this session — just make sure we're not
       // stuck on a loading screen, without re-reading Firestore.
       if (lastCheckedUid.current === user.uid) {
-        if (avatarSetupCheckedUid.current === user.uid || root === "preferences" || root === "edit-profile") {
-          setLoading(false);
-          setIsAuthReady(true);
-          return;
-        }
-        try {
-          const publicProfile = await getDoc(doc(db, "publicProfiles", user.uid));
-          const data = publicProfile.exists() ? publicProfile.data() : {};
-          if (data.avatarProvider !== "tenor" || typeof data.avatarId !== "string") {
-            router.replace({ pathname: "/edit-profile", params: { requireAvatar: "1" } });
-          } else {
-            avatarSetupCheckedUid.current = user.uid;
-          }
-        } catch (error) {
-          console.error("Profile avatar setup check failed:", error);
-        }
         setLoading(false);
         setIsAuthReady(true);
         return;
@@ -140,13 +123,7 @@ function RootNavigator() {
             router.replace("/preferences");
           }
         } else {
-          const publicProfile = await getDoc(doc(db, "publicProfiles", user.uid));
-          const publicData = publicProfile.exists() ? publicProfile.data() : {};
-          const hasAvatar = publicData.avatarProvider === "tenor" && typeof publicData.avatarId === "string";
-          if (hasAvatar) avatarSetupCheckedUid.current = user.uid;
-          if (!hasAvatar && root !== "edit-profile") {
-            router.replace({ pathname: "/edit-profile", params: { requireAvatar: "1" } });
-          } else if (!isAuthenticatedAppRoute) {
+          if (!isAuthenticatedAppRoute) {
             // If prefs and profile setup exist and user is on an auth screen, move to tabs.
             router.replace("/(tabs)");
           }

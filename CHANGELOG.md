@@ -1,6 +1,6 @@
 # Change Log
 
-This document summarizes the accumulated source changes on `codex/gif-avatars-worker-icons` relative to the previous `checkpoint/before-visual-redesign` baseline. It excludes `.env` values. The project owner deployed the GIF Worker; publishing Firebase rules remains a separate Console action.
+This document summarizes the accumulated source changes on `codex/gif-avatars-worker-icons` relative to the previous `checkpoint/before-visual-redesign` baseline. It excludes `.env` values. The owner previously deployed the Tenor Worker; the current source replaces it with optional user uploads and must be redeployed with an R2 bucket.
 
 ## App, navigation, and web
 
@@ -20,7 +20,7 @@ This document summarizes the accumulated source changes on `codex/gif-avatars-wo
 - Kept preference onboarding after registration/login, collected date of birth, and added age-aware sexual-content filtering.
 - Added a dedicated Edit Profile page for account details, age, Discord, and Signal links.
 - Added public username profiles, friend search/requests/acceptance, friend game/review views, and profile avatars on friend/search rows.
-- Added required animated Tenor GIF profile pictures, editable later from Edit Profile. The GIF picker shows search results, preview/selection state, result counts, and an empty-results message.
+- Replaced Tenor GIF search with optional photo/GIF upload from device or browser. Users can change/remove their avatar; choosing a profile picture is no longer required to access the app or save profile details.
 
 ## PC compatibility
 
@@ -35,19 +35,19 @@ This document summarizes the accumulated source changes on `codex/gif-avatars-wo
 
 ## Backend, privacy, and setup
 
-- Updated `firestore.rules` for age/preferences, libraries and giveaway types, private PC specs, social access, and public Tenor avatar IDs.
-- Replaced the proposed Firebase callable GIF function with a Cloudflare Worker so GIF search can run on Firebase Spark without a Blaze upgrade. The Worker validates Firebase ID tokens and stores the Tenor API key as a Cloudflare secret; the app persists only a GIF ID and resolves current media URLs in memory.
+- Updated `firestore.rules` for age/preferences, libraries and giveaway types, private PC specs, social access, and optional uploaded avatar URLs/keys.
+- Replaced Tenor search with an authenticated Cloudflare Worker upload/delete API backed by R2. The Worker validates Firebase ID tokens, checks image signatures and a 5 MB limit, and stores public avatar objects. No Tenor key is required.
 - Added setup documentation in `gif-worker/README.md`, `README.md`, and this handoff. `.env` is ignored and no secret values are checked in.
 
-## Files to configure before exercising GIF search
+## Files/services to configure before exercising avatar uploads
 
-- The project owner deployed the Worker at `https://gamepal-gif-search.thakurmithlesh988.workers.dev`; Wrangler stores secrets encrypted and does not reveal them afterward. See [`gif-worker/README.md`](gif-worker/README.md) to verify bindings and set the app URL.
-- Set `EXPO_PUBLIC_GIF_API_URL` in the local root `.env` to that Worker URL, then restart Expo.
-- Publish the latest `firestore.rules` file.
+- Create the `gamepal-avatars` Cloudflare R2 bucket, then redeploy the updated Worker using [`gif-worker/README.md`](gif-worker/README.md). The deployed Worker URL stays `https://gamepal-gif-search.thakurmithlesh988.workers.dev`.
+- Set `EXPO_PUBLIC_AVATAR_API_URL` in the local root `.env` to that Worker URL, then restart Expo. Do not share `.env` contents.
+- Publish the updated `firestore.rules` file.
 - For a new checkout, run `npx expo prebuild --platform android` before Gradle so the source icon settings are copied to generated Android resources.
 
 ## Verification status
 
 - No end-to-end app build or test suite was run for this accumulated branch.
-- The Worker endpoint is deployed by the project owner. Confirm its `TENOR_API_KEY` and `FIREBASE_PROJECT_ID` secrets with a successful in-app GIF search; secret values cannot be viewed in Wrangler after entry. Firestore rules still need to be published if that has not been done in Firebase Console.
+- The source Worker now requires an R2 bucket binding and only a `FIREBASE_PROJECT_ID` secret. The old Tenor deployment must be replaced by deploying this source. Firebase rules still need to be published if that has not been done in Firebase Console.
 - The installed APK can retain the old launcher icon until rebuilt and reinstalled.

@@ -127,7 +127,7 @@ export default function FriendProfile() {
     >
       <Pressable style={styles.back} onPress={() => router.back()}><Ionicons name="arrow-back" size={22} color={themeColors.accentText} /><Text style={styles.backText}>Friends</Text></Pressable>
       <View style={styles.header}>
-        <ProfileAvatar uri={profile.avatarPreviewUrl || profile.avatarUrl} gifId={profile.avatarId} size={58} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} />
+        <ProfileAvatar uri={profile.avatarUrl} size={58} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} />
         <View style={{ flex: 1 }}><Text style={styles.name}>{profile.displayName}</Text><Text style={styles.username}>@{profile.username}</Text></View>
         <View style={styles.friendBadge}><Ionicons name="people" size={14} color={themeColors.onAccent} /><Text style={styles.friendBadgeText}>Friends</Text></View>
       </View>

@@ -59,7 +59,7 @@ service cloud.firestore {
 
     function validPublicProfile() {
       let data = request.resource.data;
-      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'avatarUrl', 'avatarPreviewUrl', 'avatarId', 'avatarProvider', 'updatedAt'])
+      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'avatarUrl', 'avatarStorageKey', 'avatarProvider', 'updatedAt'])
         && data.keys().hasAll(['displayName', 'username', 'usernameLower', 'updatedAt'])
         && data.displayName is string
         && data.displayName.size() > 0
@@ -74,32 +74,22 @@ service cloud.firestore {
           || (
             data.avatarUrl is string
             && data.avatarUrl.size() <= 2048
-            && data.avatarUrl.matches('^https://media[.]tenor[.]com/.*$')
+            && data.avatarUrl.matches('^https://gamepal-gif-search[.]thakurmithlesh988[.]workers[.]dev/avatar/[A-Za-z0-9_-]{1,128}/[a-f0-9-]{36}[.](jpg|png|webp|gif)$')
           )
         )
         && (
-          !('avatarPreviewUrl' in data)
+          !('avatarStorageKey' in data)
           || (
-            data.avatarPreviewUrl is string
-            && data.avatarPreviewUrl.size() <= 2048
-            && data.avatarPreviewUrl.matches('^https://media[.]tenor[.]com/.*$')
-          )
-        )
-        && (
-          !('avatarId' in data)
-          || (
-            data.avatarId is string
-            && data.avatarId.size() > 0
-            && data.avatarId.size() <= 80
+            data.avatarStorageKey is string
+            && data.avatarStorageKey.size() <= 200
+            && data.avatarStorageKey.matches('^[A-Za-z0-9_-]{1,128}/[a-f0-9-]{36}[.](jpg|png|webp|gif)$')
           )
         )
         && (
           !('avatarProvider' in data)
-          || (
-            data.avatarProvider is string
-            && data.avatarProvider == 'tenor'
-            && ('avatarId' in data)
-          )
+          || (data.avatarProvider == 'upload'
+            && ('avatarUrl' in data)
+            && ('avatarStorageKey' in data))
         )
         && data.updatedAt == request.time;
     }

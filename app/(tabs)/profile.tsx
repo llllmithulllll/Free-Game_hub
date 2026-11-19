@@ -81,8 +81,7 @@ export default function Profile() {
   const [userName, setUserName] = useState(
     auth.currentUser?.displayName || "Gamer"
   );
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
-  const [avatarId, setAvatarId] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
 
   // ==========================================================
@@ -110,8 +109,7 @@ export default function Profile() {
       const data = snapshot.exists() ? snapshot.data() : {};
       const publicData = publicProfile.exists() ? publicProfile.data() : {};
       setUserName(data.displayName || user.displayName || "Gamer");
-      setAvatarPreviewUrl(publicData.avatarPreviewUrl || publicData.avatarUrl || null);
-      setAvatarId(publicData.avatarId || null);
+      setAvatarUrl(publicData.avatarUrl || null);
       setDateOfBirth(dateOfBirthFromStorage(data.dateOfBirth) || null);
       setSexualContentFilter(preferences.exists() ? preferences.data().sexualContentFilter !== false : true);
     }).catch((error) => console.error("Profile refresh failed:", error));
@@ -693,7 +691,7 @@ export default function Profile() {
             styles.header
           }
         >
-          <ProfileAvatar uri={avatarPreviewUrl} gifId={avatarId} size={64} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
+          <ProfileAvatar uri={avatarUrl} size={64} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
 
           <View
             style={

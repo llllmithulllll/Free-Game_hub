@@ -1,25 +1,22 @@
 import { ageFromDateOfBirth, dateOfBirthFromStorage } from "@/lib/content-filter";
 import GamePalLoader from "@/components/GamePalLoader";
 import ProfileAvatar from "@/components/ProfileAvatar";
-import { searchProfileGifs } from "@/lib/gif-avatars";
-import type { ProfileGif } from "@/lib/gif-avatars";
+import { deleteProfileAvatar, uploadProfileAvatar } from "@/lib/profile-avatars";
 import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
 import Animated, { ReduceMotion, SlideInRight } from "react-native-reanimated";
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
 import { updateProfile } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc, Timestamp } from "firebase/firestore";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Platform, Pressable, Text, TextInput, View } from "react-native";
 
 export default function EditProfile() {
   const { colors } = useAppTheme();
   const showAlert = useThemedAlert();
   const router = useRouter();
-  const { requireAvatar } = useLocalSearchParams<{ requireAvatar?: string }>();
-  const { width } = useWindowDimensions();
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
@@ -27,12 +24,9 @@ export default function EditProfile() {
   const [discordUserId, setDiscordUserId] = useState("");
   const [signalLink, setSignalLink] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
-  const [avatarId, setAvatarId] = useState("");
-  const [gifQuery, setGifQuery] = useState("");
-  const [gifResults, setGifResults] = useState<ProfileGif[]>([]);
-  const [gifSearchCompleted, setGifSearchCompleted] = useState(false);
-  const [searchingGifs, setSearchingGifs] = useState(false);
+  const [avatarStorageKey, setAvatarStorageKey] = useState("");
+  const [previousAvatarStorageKey, setPreviousAvatarStorageKey] = useState("");
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -59,8 +53,8 @@ export default function EditProfile() {
         setDiscordUserId(links.discordUserId || "");
         setSignalLink(links.signalLink || "");
         setAvatarUrl(publicProfile.avatarUrl || "");
-        setAvatarPreviewUrl(publicProfile.avatarPreviewUrl || publicProfile.avatarUrl || "");
-        setAvatarId(publicProfile.avatarId || "");
+        setAvatarStorageKey(publicProfile.avatarStorageKey || "");
+        setPreviousAvatarStorageKey(publicProfile.avatarStorageKey || "");
       } catch (error) {
         console.error("Edit profile load failed:", error);
         showAlert("Error", "Could not load your profile.");
@@ -71,30 +65,26 @@ export default function EditProfile() {
     load();
   }, [router]);
 
-  const searchGifs = async () => {
-    const term = gifQuery.trim();
-    if (term.length < 2) return showAlert("Search for a GIF", "Enter at least two characters.");
-    setSearchingGifs(true);
-    setGifSearchCompleted(false);
-    setGifResults([]);
+  const chooseAvatar = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return showAlert("Photo access needed", "Allow photo library access to choose a profile picture or GIF.");
+    // Expo preserves animated GIF frames on Android only with quality 1 and editing disabled.
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, quality: 1, selectionLimit: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    setUploadingAvatar(true);
     try {
-      setGifResults(await searchProfileGifs(term));
-      setGifSearchCompleted(true);
+      const uploaded = await uploadProfileAvatar(result.assets[0]);
+      if (avatarStorageKey && avatarStorageKey !== previousAvatarStorageKey) {
+        await deleteProfileAvatar(avatarStorageKey).catch((error) => console.warn("Temporary profile picture cleanup failed:", error));
+      }
+      setAvatarUrl(uploaded.url);
+      setAvatarStorageKey(uploaded.key);
     } catch (error: any) {
-      console.error("Profile GIF search failed:", error);
-      const message = String(error?.message || "");
-      showAlert("GIF search unavailable", message.includes("EXPO_PUBLIC_GIF_API_URL")
-        ? "Set EXPO_PUBLIC_GIF_API_URL to your deployed free GIF Worker URL, then restart the app."
-        : "Could not reach the GIF service. Check the Worker deployment and your connection, then try again.");
+      console.error("Profile picture upload failed:", error);
+      showAlert("Upload failed", error?.message || "Could not upload the selected picture. Check the Worker and R2 setup, then try again.");
     } finally {
-      setSearchingGifs(false);
+      setUploadingAvatar(false);
     }
-  };
-
-  const selectGif = (gif: ProfileGif) => {
-    setAvatarUrl(gif.url);
-    setAvatarPreviewUrl(gif.previewUrl);
-    setAvatarId(gif.id);
   };
 
   const save = async () => {
@@ -107,7 +97,6 @@ export default function EditProfile() {
 
     if (!user) return;
     if (!normalizedName) return showAlert("Name required", "Enter a display name.");
-    if (!avatarId) return showAlert("Choose a profile GIF", "Select an animated GIF so friends can recognize your profile.");
     if (!/^[a-z0-9_]{3,20}$/.test(usernameLower)) {
       return showAlert("Check your username", "Use 3–20 letters, numbers, or underscores.");
     }
@@ -140,8 +129,7 @@ export default function EditProfile() {
           displayName: normalizedName,
           username: normalizedUsername,
           usernameLower,
-          avatarId,
-          avatarProvider: "tenor",
+          ...(avatarUrl && avatarStorageKey ? { avatarUrl, avatarStorageKey, avatarProvider: "upload" } : {}),
           updatedAt: serverTimestamp(),
         }),
         setDoc(doc(db, "users", user.uid, "socialLinks", "links"), {
@@ -156,8 +144,12 @@ export default function EditProfile() {
           updatedAt: serverTimestamp(),
         }, { merge: true })] : []),
       ]);
+      if (previousAvatarStorageKey && previousAvatarStorageKey !== avatarStorageKey) {
+        await deleteProfileAvatar(previousAvatarStorageKey).catch((error) => console.warn("Old profile picture cleanup failed:", error));
+        setPreviousAvatarStorageKey(avatarStorageKey);
+      }
       showAlert("Profile saved", "Your profile is updated. Contact links are shared with accepted friends only.", [
-        { text: "Done", onPress: () => requireAvatar === "1" ? router.replace("/(tabs)") : router.back() },
+        { text: "Done", onPress: () => router.back() },
       ]);
     } catch (error) {
       console.error("Edit profile save failed:", error);
@@ -180,39 +172,35 @@ export default function EditProfile() {
       keyboardShouldPersistTaps="handled"
       entering={SlideInRight.duration(220).reduceMotion(ReduceMotion.System)}
     >
-      {requireAvatar !== "1" && <Pressable onPress={() => router.back()} style={styles.back}>
+      <Pressable onPress={() => router.back()} style={styles.back}>
         <Ionicons name="arrow-back" size={22} color={themeColors.accentText} />
         <Text style={styles.backText}>Profile</Text>
-      </Pressable>}
+      </Pressable>
       <Text style={styles.title}>Edit profile</Text>
-      <Text style={styles.subtitle}>{requireAvatar === "1" ? "Choose an animated profile GIF to finish setting up your account, then complete the rest of your profile." : "Manage the details friends can see and the ways they can reach you."}</Text>
+      <Text style={styles.subtitle}>Manage your profile details and the contact links friends can see.</Text>
 
       <Text style={styles.section}>PROFILE</Text>
-      <Text style={styles.label}>Animated profile picture</Text>
+      <Text style={styles.label}>Profile picture · optional</Text>
       <View style={styles.avatarPreviewRow}>
-        <ProfileAvatar uri={avatarPreviewUrl} gifId={avatarId} size={70} iconColor={colors.onAccent} backgroundColor={colors.accent} />
+        <ProfileAvatar uri={avatarUrl} size={70} iconColor={colors.onAccent} backgroundColor={colors.accent} />
         <Text style={[styles.hint, { color: colors.textSecondary, flex: 1, marginTop: 0, marginBottom: 0 }]}>
-          {avatarUrl ? "This animated GIF will appear on your profile and to other players." : "Choose an animated GIF. Your profile needs one before it can be saved."}
+          {avatarUrl ? "Your uploaded picture or GIF appears on your profile and to other players." : "Add a photo or GIF if you like. You can save your profile without one."}
         </Text>
       </View>
-      <View style={styles.gifSearchRow}>
-        <TextInput style={[styles.input, styles.gifSearchInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]} value={gifQuery} onChangeText={setGifQuery} placeholder="Search animated GIFs" placeholderTextColor={colors.muted} returnKeyType="search" onSubmitEditing={searchGifs} />
-        <Pressable style={[styles.gifSearchButton, { backgroundColor: colors.accent }]} onPress={searchGifs} disabled={searchingGifs}>
-          {searchingGifs ? <ActivityIndicator color={colors.onAccent} /> : <Ionicons name="search" size={20} color={colors.onAccent} />}
-        </Pressable>
-      </View>
-      <Text style={[styles.hint, { color: colors.textSecondary }]}>Powered by Tenor · Safe-filtered GIF results.</Text>
-      {gifSearchCompleted && gifResults.length > 0 && <Text style={[styles.gifResultsTitle, { color: colors.text }]}>Choose a GIF · {gifResults.length} results for “{gifQuery.trim()}”</Text>}
-      {gifSearchCompleted && gifResults.length > 0 && <View style={styles.gifGrid}>
-        {gifResults.map((gif) => {
-          const selected = avatarUrl === gif.url;
-          return <Pressable key={gif.id} accessibilityRole="button" accessibilityLabel={`Choose GIF: ${gif.title}`} onPress={() => selectGif(gif)} style={[styles.gifTile, { width: Math.max(70, Math.min(94, (width - 88) / 3)), borderColor: selected ? colors.accent : colors.border, borderWidth: selected ? 3 : 1 }]}>
-            <Image source={{ uri: gif.previewUrl }} contentFit="cover" cachePolicy="memory" style={styles.gifImage} />
-            {selected && <View style={[styles.gifSelected, { backgroundColor: colors.accent }]}><Ionicons name="checkmark" size={14} color={colors.onAccent} /></View>}
-          </Pressable>;
-        })}
-      </View>}
-      {gifSearchCompleted && gifResults.length === 0 && <Text style={[styles.gifEmpty, { color: colors.textSecondary }]}>No GIFs found for “{gifQuery.trim()}”. Try a different search.</Text>}
+      <Pressable style={[styles.chooseAvatarButton, { borderColor: colors.border, backgroundColor: colors.surface }]} onPress={chooseAvatar} disabled={uploadingAvatar}>
+        {uploadingAvatar ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="image-outline" size={19} color={colors.accent} />}
+        <Text style={[styles.chooseAvatarText, { color: colors.text }]}>{uploadingAvatar ? "Uploading…" : avatarUrl ? "Change picture or GIF" : "Choose picture or GIF"}</Text>
+      </Pressable>
+      {avatarUrl && !uploadingAvatar && <Pressable style={styles.removeAvatarButton} onPress={() => {
+        if (avatarStorageKey && avatarStorageKey !== previousAvatarStorageKey) {
+          void deleteProfileAvatar(avatarStorageKey).catch((error) => console.warn("Temporary profile picture cleanup failed:", error));
+        }
+        setAvatarUrl("");
+        setAvatarStorageKey("");
+      }}>
+        <Text style={[styles.removeAvatarText, { color: colors.textSecondary }]}>Remove profile picture</Text>
+      </Pressable>}
+      <Text style={[styles.hint, { color: colors.textSecondary }]}>JPEG, PNG, WebP, and animated GIF · up to 5 MB. Uploaded pictures are visible on your public profile.</Text>
 
       <Text style={styles.label}>Display name</Text>
       <TextInput style={styles.input} value={displayName} onChangeText={setDisplayName} placeholder="Your name" placeholderTextColor={themeColors.muted} />
@@ -256,13 +244,8 @@ const styles = createThemedStyles({
   saveButton: { backgroundColor: "#f5c518", borderRadius: 12, minHeight: 50, alignItems: "center", justifyContent: "center", marginTop: 26 },
   saveText: { color: "#111", fontWeight: "800", fontSize: 16 },
   avatarPreviewRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
-  gifSearchRow: { flexDirection: "row", alignItems: "center", gap: 9 },
-  gifSearchInput: { flex: 1, width: "auto", marginBottom: 0 },
-  gifSearchButton: { width: 50, height: 48, borderRadius: 11, alignItems: "center", justifyContent: "center" },
-  gifGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12, marginBottom: 8 },
-  gifResultsTitle: { fontSize: 13, fontWeight: "700", marginTop: 10 },
-  gifEmpty: { fontSize: 13, lineHeight: 19, marginTop: 10, marginBottom: 8 },
-  gifTile: { height: 88, borderRadius: 12, overflow: "hidden", position: "relative" },
-  gifImage: { width: "100%", height: "100%" },
-  gifSelected: { position: "absolute", right: 5, top: 5, width: 23, height: 23, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  chooseAvatarButton: { minHeight: 48, borderRadius: 11, borderWidth: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, marginBottom: 12 },
+  chooseAvatarText: { fontSize: 14, fontWeight: "700" },
+  removeAvatarButton: { alignSelf: "flex-start", paddingVertical: 7, paddingHorizontal: 2, marginBottom: 7 },
+  removeAvatarText: { fontSize: 13, fontWeight: "600" },
 });
