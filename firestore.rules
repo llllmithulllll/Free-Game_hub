@@ -59,7 +59,7 @@ service cloud.firestore {
 
     function validPublicProfile() {
       let data = request.resource.data;
-      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'updatedAt'])
+      return data.keys().hasOnly(['displayName', 'username', 'usernameLower', 'avatarUrl', 'avatarPreviewUrl', 'avatarId', 'avatarProvider', 'updatedAt'])
         && data.keys().hasAll(['displayName', 'username', 'usernameLower', 'updatedAt'])
         && data.displayName is string
         && data.displayName.size() > 0
@@ -69,6 +69,38 @@ service cloud.firestore {
         && data.usernameLower is string
         && data.usernameLower.matches('^[a-z0-9_]{3,20}$')
         && data.usernameLower == data.username.lower()
+        && (
+          !('avatarUrl' in data)
+          || (
+            data.avatarUrl is string
+            && data.avatarUrl.size() <= 2048
+            && data.avatarUrl.matches('^https://media[.]tenor[.]com/.*$')
+          )
+        )
+        && (
+          !('avatarPreviewUrl' in data)
+          || (
+            data.avatarPreviewUrl is string
+            && data.avatarPreviewUrl.size() <= 2048
+            && data.avatarPreviewUrl.matches('^https://media[.]tenor[.]com/.*$')
+          )
+        )
+        && (
+          !('avatarId' in data)
+          || (
+            data.avatarId is string
+            && data.avatarId.size() > 0
+            && data.avatarId.size() <= 80
+          )
+        )
+        && (
+          !('avatarProvider' in data)
+          || (
+            data.avatarProvider is string
+            && data.avatarProvider == 'tenor'
+            && ('avatarId' in data)
+          )
+        )
         && data.updatedAt == request.time;
     }
 
@@ -93,16 +125,23 @@ service cloud.firestore {
         && data.categories is list
         && data.categories.size() <= 6
         && data.categories.hasOnly(['action', 'shooter', 'mmorpg', 'racing', 'sports', 'strategy'])
-        && (!('sexualContentFilter' in data)
-          || (data.sexualContentFilter is bool
-            && (data.sexualContentFilter || isAtLeast18(request.auth.uid))))
+        && (
+          !('sexualContentFilter' in data)
+          || (
+            data.sexualContentFilter is bool
+            && (
+              data.sexualContentFilter == false
+              || isAtLeast18(request.auth.uid)
+            )
+          )
+        )
         && data.updatedAt == request.time;
     }
 
     function validLibraryEntry() {
       let data = request.resource.data;
       return data.keys().hasOnly([
-          'status', 'title', 'thumbnail', 'updatedAt', 'platforms', 'giveawayUrl'
+          'status', 'title', 'thumbnail', 'updatedAt', 'platforms', 'giveawayUrl', 'giveawayType'
         ])
         && data.keys().hasAll(['status', 'title', 'thumbnail', 'updatedAt'])
         && data.status in ['Claimed', 'Playing', 'Completed', 'To Play']
@@ -120,7 +159,9 @@ service cloud.firestore {
         && (!('giveawayUrl' in data)
           || (data.giveawayUrl is string
             && data.giveawayUrl.size() <= 2048
-            && data.giveawayUrl.matches('^https://.*')));
+            && data.giveawayUrl.matches('^https://.*')))
+        && (!('giveawayType' in data)
+          || data.giveawayType in ['game', 'loot', 'beta', 'other']);
     }
 
     function validGlobalGame(gameId) {
@@ -187,6 +228,35 @@ service cloud.firestore {
           && preferenceId == 'data'
           && validPreferences();
         allow delete: if false;
+      }
+
+      // Hardware data is private to its owner. Never copy this into publicProfiles.
+      match /pcProfile/{profileId} {
+        allow read: if owns(userId);
+        allow create, update: if owns(userId)
+          && profileId == 'specs'
+          && request.resource.data.keys().hasOnly(['deviceType', 'gpuSlug', 'gpuName', 'cpuSlug', 'cpuName', 'ramGb', 'resolution', 'preset', 'updatedAt'])
+          && request.resource.data.keys().hasAll(['gpuSlug', 'gpuName', 'cpuSlug', 'cpuName', 'ramGb', 'resolution', 'preset', 'updatedAt'])
+          && (!('deviceType' in request.resource.data) || request.resource.data.deviceType in ['desktop', 'laptop'])
+          && request.resource.data.gpuSlug is string
+          && request.resource.data.gpuSlug.size() > 0
+          && request.resource.data.gpuSlug.size() <= 160
+          && request.resource.data.gpuName is string
+          && request.resource.data.gpuName.size() > 0
+          && request.resource.data.gpuName.size() <= 160
+          && request.resource.data.cpuSlug is string
+          && request.resource.data.cpuSlug.size() > 0
+          && request.resource.data.cpuSlug.size() <= 160
+          && request.resource.data.cpuName is string
+          && request.resource.data.cpuName.size() > 0
+          && request.resource.data.cpuName.size() <= 160
+          && request.resource.data.ramGb is int
+          && request.resource.data.ramGb >= 1
+          && request.resource.data.ramGb <= 1024
+          && request.resource.data.resolution in ['1080p', '1440p', '4K']
+          && request.resource.data.preset in ['low', 'medium', 'high', 'ultra']
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if owns(userId) && profileId == 'specs';
       }
 
       match /gameStatus/{gameId} {

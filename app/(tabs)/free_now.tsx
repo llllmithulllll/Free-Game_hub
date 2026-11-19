@@ -1,5 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useState } from "react";
+import GamePalLoader from "@/components/GamePalLoader";
+import GamingBackdrop from "@/components/GamingBackdrop";
+import { Image } from "expo-image";
+import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState, Platform as NativePlatform } from "react-native";
 import {
@@ -12,17 +16,16 @@ import {
 } from "@/lib/local-notifications";
 import {
   ActivityIndicator,
-  Alert,
-  Image,
   Linking,
   Modal,
   Pressable,
+  ScrollView,
   Share,
-  SectionList,
-  StyleSheet,
-  Text,
+  SectionList,  Text,
   TextInput,
   View,
+  Platform,
+  useWindowDimensions,
 } from "react-native";
 
 import { auth, db } from "@/lib/firebase";
@@ -35,6 +38,24 @@ import {
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
+
+const GIVEAWAYS_CACHE_KEY = "@gamehub_giveaways_cache_v1";
+const GIVEAWAY_ALERT_PLATFORMS = [
+  { label: "PC", value: "pc" },
+  { label: "Steam", value: "steam" },
+  { label: "Epic Games Store", value: "epic-games-store" },
+  { label: "PlayStation", value: "ps4" },
+  { label: "Xbox", value: "xbox-one" },
+  { label: "Nintendo Switch", value: "switch" },
+  { label: "GOG", value: "gog" },
+  { label: "Ubisoft Connect", value: "ubisoft" },
+];
+const GIVEAWAY_ALERT_TYPES = [
+  { label: "Games", value: "game" },
+  { label: "DLC & loot", value: "loot" },
+  { label: "Beta access", value: "beta" },
+  { label: "Other offers", value: "other" },
+];
 
 /* ---------------- DROPDOWN ---------------- */
 function Dropdown({ label, value, options, onChange }: any) {
@@ -85,8 +106,20 @@ async function seedGiveawayAlerts(selectedPlatform: string) {
   await AsyncStorage.setItem(key, JSON.stringify(list.map((item: any) => String(item.id))));
 }
 
+function getGiveawayAlertType(item: any) {
+  const value = String(item.type || "").toLowerCase();
+  if (value.includes("game")) return "game";
+  if (value.includes("loot") || value.includes("dlc")) return "loot";
+  if (value.includes("beta")) return "beta";
+  return "other";
+}
+
 /* ---------------- MAIN SCREEN ---------------- */
 export default function FreeNow() {
+  useAppTheme();
+  const showAlert = useThemedAlert();
+  const { width } = useWindowDimensions();
+  const isWeb = Platform.OS === "web";
   const [giveaways, setGiveaways] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -98,6 +131,9 @@ export default function FreeNow() {
   const [filterSexualContent, setFilterSexualContent] = useState(true);
   const [notificationSettings, setNotificationSettings] = useState(DEFAULT_NOTIFICATION_SETTINGS);
   const [notificationOptionsVisible, setNotificationOptionsVisible] = useState(false);
+  const [draftGiveawayPlatforms, setDraftGiveawayPlatforms] = useState<string[]>(["all"]);
+  const [draftGiveawayTypes, setDraftGiveawayTypes] = useState<string[]>(["all"]);
+  const giveawayRequestId = useRef(0);
 
   useEffect(() => {
     loadNotificationSettings().then(setNotificationSettings);
@@ -124,7 +160,18 @@ export default function FreeNow() {
   }, []);
 
   useEffect(() => {
-    fetchGiveaways();
+    let cancelled = false;
+    const requestId = ++giveawayRequestId.current;
+    const cacheKey = `${GIVEAWAYS_CACHE_KEY}_${platform}_${type}`;
+    setLoading(true);
+    setErrorMsg(null);
+    AsyncStorage.getItem(cacheKey).then((cached) => {
+      if (!cancelled && requestId === giveawayRequestId.current && cached) setGiveaways(JSON.parse(cached));
+    }).catch((error) => console.warn("Could not load cached giveaways:", error));
+    fetchGiveaways(requestId).finally(() => {
+      if (!cancelled && requestId === giveawayRequestId.current) setLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [platform, type]);
 
   useEffect(() => {
@@ -134,25 +181,29 @@ export default function FreeNow() {
     const scan = async () => {
       if (stopped || scanning || AppState.currentState !== "active") return;
       scanning = true;
-      const selectedPlatform = notificationSettings.giveawayPlatform;
-      const key = `@gamehub_seen_giveaways_${selectedPlatform}`;
+      const selectedPlatforms = notificationSettings.giveawayPlatforms.length ? notificationSettings.giveawayPlatforms : ["all"];
+      const allItems: any[] = [];
       try {
-        const list = await fetchAlertGiveaways(selectedPlatform);
-        if (stopped) return;
-        const previousValue = await AsyncStorage.getItem(key);
-        const previousIds = previousValue ? new Set<string>(JSON.parse(previousValue)) : null;
-        const currentIds = list.map((item: any) => String(item.id));
-        if (previousIds) {
-          const fresh = list.filter((item: any) => !previousIds.has(String(item.id)));
-          for (const item of fresh.slice(0, 3)) {
-            await showLocalNotification(
-              "New game giveaway",
-              `${item.title} is free on ${item.platforms || "a supported platform"}.`,
-              { url: "/free_now", giveawayId: String(item.id) },
-            );
-          }
+        for (const selectedPlatform of selectedPlatforms) {
+          const list = await fetchAlertGiveaways(selectedPlatform);
+          if (stopped) return;
+          const key = `@gamehub_seen_giveaways_${selectedPlatform}`;
+          const previousValue = await AsyncStorage.getItem(key);
+          const previousIds = previousValue ? new Set<string>(JSON.parse(previousValue)) : null;
+          const currentIds = list.map((item: any) => String(item.id));
+          if (previousIds) allItems.push(...list.filter((item: any) => !previousIds.has(String(item.id))));
+          await AsyncStorage.setItem(key, JSON.stringify(currentIds));
         }
-        await AsyncStorage.setItem(key, JSON.stringify(currentIds));
+        const selectedTypes = notificationSettings.giveawayTypes.length ? notificationSettings.giveawayTypes : ["all"];
+        const uniqueFresh = Array.from(new Map(allItems.map((item) => [String(item.id), item])).values())
+          .filter((item: any) => selectedTypes.includes("all") || selectedTypes.includes(getGiveawayAlertType(item)));
+        for (const item of uniqueFresh.slice(0, 3)) {
+          await showLocalNotification(
+            "New game giveaway",
+            `${item.title} is free on ${item.platforms || "a supported platform"}.`,
+            { url: "/free_now", giveawayId: String(item.id) },
+          );
+        }
       } catch (error) {
         console.error("Giveaway alert check failed:", error);
       } finally {
@@ -170,11 +221,23 @@ export default function FreeNow() {
       clearInterval(timer);
       appStateListener.remove();
     };
-  }, [notificationSettings.giveawayAlerts, notificationSettings.giveawayPlatform]);
+  }, [notificationSettings.giveawayAlerts, notificationSettings.giveawayPlatforms.join(","), notificationSettings.giveawayTypes.join(",")]);
 
-  const selectGiveawayAlertPlatform = async (selectedPlatform: string) => {
+  const toggleMultiSelect = (selected: string, setValues: Dispatch<SetStateAction<string[]>>) => {
+    setValues((current) => {
+      if (selected === "all") return ["all"];
+      const withoutAll = current.filter((value) => value !== "all");
+      return withoutAll.includes(selected)
+        ? withoutAll.filter((value) => value !== selected)
+        : [...withoutAll, selected];
+    });
+  };
+
+  const saveGiveawayAlertPlatforms = async () => {
     setNotificationOptionsVisible(false);
-    if (selectedPlatform === "off") {
+    const selectedPlatforms = draftGiveawayPlatforms.length ? draftGiveawayPlatforms : [];
+    const selectedTypes = draftGiveawayTypes.length ? draftGiveawayTypes : [];
+    if (!selectedPlatforms.length || !selectedTypes.length) {
       const next = { ...notificationSettings, giveawayAlerts: false };
       setNotificationSettings(next);
       await saveNotificationSettings(next);
@@ -182,24 +245,25 @@ export default function FreeNow() {
     }
     const granted = await requestLocalNotificationPermission();
     if (!granted) {
-      Alert.alert("Notifications are off", "Allow notifications in Android settings to get giveaway alerts.");
+      showAlert("Notifications are off", "Allow notifications in Android settings to get giveaway alerts.");
       return;
     }
     try {
-      await seedGiveawayAlerts(selectedPlatform);
+      for (const selectedPlatform of selectedPlatforms) await seedGiveawayAlerts(selectedPlatform);
       const next: LocalNotificationSettings = {
         ...notificationSettings,
         giveawayAlerts: true,
-        giveawayPlatform: selectedPlatform,
+        giveawayPlatforms: selectedPlatforms,
+        giveawayTypes: selectedTypes,
       };
       setNotificationSettings(next);
       await saveNotificationSettings(next);
-      Alert.alert("Giveaway alerts enabled", selectedPlatform === "all"
+      showAlert("Giveaway alerts enabled", selectedPlatforms.includes("all")
         ? "You’ll be notified about new giveaways on any platform while the app is active."
-        : `You’ll be notified about new ${selectedPlatform} giveaways while the app is active.`);
+        : `You’ll be notified about new offers on ${selectedPlatforms.map((value) => GIVEAWAY_ALERT_PLATFORMS.find((item) => item.value === value)?.label || value).join(", ")} while the app is active.`);
     } catch (error) {
       console.error("Could not enable giveaway alerts:", error);
-      Alert.alert("Could not enable alerts", "The giveaway feed could not be reached. Try again when you are online.");
+      showAlert("Could not enable alerts", "The giveaway feed could not be reached. Try again when you are online.");
     }
   };
 
@@ -222,9 +286,10 @@ export default function FreeNow() {
     return () => unsubscribe();
   }, []);
 
-  async function fetchGiveaways() {
+  async function fetchGiveaways(requestId = ++giveawayRequestId.current) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     try {
-      setLoading(true);
       setErrorMsg(null);
 
       // Use the canonical www. host — GamerPower's own docs always show
@@ -237,7 +302,7 @@ export default function FreeNow() {
       if (type !== "all") params.push(`type=${type}`);
       if (params.length) url += "?" + params.join("&");
 
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
 
       if (!res.ok) {
         // Surfacing the actual HTTP status — previously this was
@@ -256,19 +321,22 @@ export default function FreeNow() {
         throw new Error("Unexpected response shape from GamerPower API");
       }
 
-      setGiveaways(list);
+      if (requestId === giveawayRequestId.current) setGiveaways(list);
+      void AsyncStorage.setItem(`${GIVEAWAYS_CACHE_KEY}_${platform}_${type}`, JSON.stringify(list));
     } catch (e: any) {
-      console.error("Giveaways fetch error:", e?.message || e);
-      setErrorMsg(e?.message || "Could not load giveaways. Check your connection.");
-      setGiveaways([]);
+      const message = e?.name === "AbortError"
+        ? "Giveaways are taking too long to load. Check your connection and retry."
+        : e?.message || "Could not load giveaways. Check your connection.";
+      console.error("Giveaways fetch error:", message);
+      if (requestId === giveawayRequestId.current) setErrorMsg(message);
     } finally {
-      setLoading(false);
+      clearTimeout(timeout);
     }
   }
 
   async function claimGiveaway(item: any) {
     const user = auth.currentUser;
-    if (!user) return Alert.alert("Error", "You must be logged in.");
+    if (!user) return showAlert("Error", "You must be logged in.");
 
     const id = item.id.toString();
     if (claimedIds.has(id)) return;
@@ -280,15 +348,18 @@ export default function FreeNow() {
         status: "Claimed", // Unified Status
         platforms: item.platforms,
         giveawayUrl: item.open_giveaway_url,
+        giveawayType: ["game", "loot", "beta"].includes(String(item.type || "").toLowerCase())
+          ? String(item.type).toLowerCase()
+          : "other",
         updatedAt: serverTimestamp(),
       };
 
       // 1. Save to User's Personal Profile (For Profile.tsx)
       await setDoc(doc(db, "users", user.uid, "gameStatus", id), gameData);
 
-      Alert.alert("Success", "Game added to your Profile!");
+      showAlert("Success", "Game added to your Profile!");
     } catch (e) {
-      Alert.alert("Error", "Could not save game.");
+      showAlert("Error", "Could not save game.");
     }
   }
 
@@ -298,7 +369,7 @@ export default function FreeNow() {
         message: `🔥 FREE GAME: ${item.title}\nClaim it here: ${item.open_giveaway_url}`,
       });
     } catch (error) {
-      Alert.alert("Error", "Could not share.");
+      showAlert("Error", "Could not share.");
     }
   };
 
@@ -326,27 +397,19 @@ export default function FreeNow() {
     })).filter((section) => section.data.length > 0);
   }, [filteredGiveaways]);
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#f5c518" />
-        <Text style={styles.loadingText}>Fetching Free Games...</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
-      <View style={styles.topBar}>
-        <Pressable style={styles.notificationBtn} onPress={() => setNotificationOptionsVisible(true)} accessibilityLabel="Giveaway notification settings">
-          <Ionicons name={notificationSettings.giveawayAlerts ? "notifications" : "notifications-outline"} size={20} color={notificationSettings.giveawayAlerts ? "#111" : "#f5c518"} />
+      <GamingBackdrop />
+      <View style={[styles.topBar, isWeb && { width: "100%", maxWidth: 1160, alignSelf: "center", marginTop: width >= 768 ? 28 : 20, paddingHorizontal: width >= 768 ? 28 : 16 }]}>
+        <Pressable style={styles.notificationBtn} onPress={() => { setDraftGiveawayPlatforms(notificationSettings.giveawayPlatforms); setDraftGiveawayTypes(notificationSettings.giveawayTypes); setNotificationOptionsVisible(true); }} accessibilityLabel="Giveaway notification settings">
+          <Ionicons name={notificationSettings.giveawayAlerts ? "notifications" : "notifications-outline"} size={20} color={notificationSettings.giveawayAlerts ? themeColors.onAccent : themeColors.accentText} />
         </Pressable>
         <Pressable style={styles.filterBtn} onPress={() => setFiltersOpen((p) => !p)}>
-          <Ionicons name="filter" size={20} color="#000" />
+          <Ionicons name="filter" size={20} color={themeColors.onAccent} />
         </Pressable>
         <TextInput
           placeholder="Search free games..."
-          placeholderTextColor="#777"
+          placeholderTextColor={themeColors.muted}
           value={search}
           onChangeText={setSearch}
           style={styles.search}
@@ -357,28 +420,39 @@ export default function FreeNow() {
         <Pressable style={styles.modalOverlay} onPress={() => setNotificationOptionsVisible(false)}>
           <View style={styles.modalBox}>
             <Text style={styles.notificationTitle}>New giveaway alerts</Text>
-            <Text style={styles.notificationSubtitle}>Choose which platform should trigger alerts.</Text>
-            {[
-              { label: "All platforms", value: "all" },
-              { label: "PC", value: "pc" },
-              { label: "Steam", value: "steam" },
-              { label: "Epic Games Store", value: "epic-games-store" },
-            ].map((option) => (
-              <Pressable key={option.value} style={styles.option} onPress={() => void selectGiveawayAlertPlatform(option.value)}>
-                <Text style={styles.optionText}>{option.label}</Text>
-                {notificationSettings.giveawayAlerts && notificationSettings.giveawayPlatform === option.value && <Ionicons name="checkmark" size={18} color="#f5c518" />}
-              </Pressable>
-            ))}
-            <Pressable style={styles.option} onPress={() => void selectGiveawayAlertPlatform("off")}>
-              <Text style={styles.optionText}>Turn alerts off</Text>
+            <Text style={styles.notificationSubtitle}>Choose several platforms and offer types. Alerts are checked while the app is open.</Text>
+            <ScrollView style={{ maxHeight: 430 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.notificationGroupTitle}>Platforms</Text>
+              {[{ label: "All platforms", value: "all" }, ...GIVEAWAY_ALERT_PLATFORMS].map((option) => (
+                <Pressable key={option.value} style={styles.option} onPress={() => toggleMultiSelect(option.value, setDraftGiveawayPlatforms)}>
+                  <Text style={styles.optionText}>{option.label}</Text>
+                  {draftGiveawayPlatforms.includes(option.value) && <Ionicons name="checkmark-circle" size={19} color={themeColors.accentText} />}
+                </Pressable>
+              ))}
+              <Text style={styles.notificationGroupTitle}>Offer types</Text>
+              {[{ label: "All offer types", value: "all" }, ...GIVEAWAY_ALERT_TYPES].map((option) => (
+                <Pressable key={option.value} style={styles.option} onPress={() => toggleMultiSelect(option.value, setDraftGiveawayTypes)}>
+                  <Text style={styles.optionText}>{option.label}</Text>
+                  {draftGiveawayTypes.includes(option.value) && <Ionicons name="checkmark-circle" size={19} color={themeColors.accentText} />}
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable style={[styles.primaryButton, { marginTop: 12 }]} onPress={() => void saveGiveawayAlertPlatforms()}>
+              <Text style={styles.primaryButtonText}>Save notification settings</Text>
             </Pressable>
           </View>
         </Pressable>
       </Modal>
 
       {errorMsg && (
-        <Pressable style={styles.errorBanner} onPress={fetchGiveaways}>
-          <Ionicons name="alert-circle" size={16} color="#ff4444" />
+        <Pressable style={styles.errorBanner} onPress={() => {
+          const requestId = ++giveawayRequestId.current;
+          setLoading(true);
+          void fetchGiveaways(requestId).finally(() => {
+            if (requestId === giveawayRequestId.current) setLoading(false);
+          });
+        }}>
+          <Ionicons name="alert-circle" size={16} color={themeColors.danger} />
           <Text style={styles.errorText}>{errorMsg} — tap to retry</Text>
         </Pressable>
       )}
@@ -398,8 +472,9 @@ export default function FreeNow() {
 
       <SectionList
         sections={giveawaySections}
+        style={isWeb ? { width: "100%", maxWidth: 1160, alignSelf: "center" } : undefined}
         keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={{ paddingBottom: 100, paddingHorizontal: 15 }}
+        contentContainerStyle={{ paddingBottom: 100, paddingHorizontal: isWeb ? (width >= 768 ? 28 : 16) : 15 }}
         stickySectionHeadersEnabled={false}
         renderSectionHeader={({ section }) => (
           <View style={styles.categoryHeading}>
@@ -408,21 +483,23 @@ export default function FreeNow() {
           </View>
         )}
         ListEmptyComponent={
-          !errorMsg ? <Text style={styles.emptyText}>No giveaways match right now.</Text> : null
+          loading ? (
+            <GamePalLoader size={108} label="Fetching free games" fullScreen={false} />
+          ) : !errorMsg ? <Text style={styles.emptyText}>No giveaways match right now.</Text> : null
         }
         renderItem={({ item }) => {
           const isClaimed = claimedIds.has(item.id.toString());
           return (
-            <View style={styles.card}>
-              <Image source={{ uri: item.thumbnail }} style={styles.image} />
-              <View style={{ flex: 1 }}>
+            <View style={[styles.card, isWeb && width >= 768 && styles.desktopCard]}>
+              <Image source={{ uri: item.thumbnail }} style={[styles.image, isWeb && width >= 768 && styles.desktopImage]} contentFit="cover" cachePolicy="memory-disk" />
+                <View style={styles.cardContent}>
                 <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
                 <Text style={styles.platform}>{item.platforms}</Text>
                 
                 <View style={styles.actionRow}>
                   {isClaimed ? (
                     <View style={[styles.button, styles.claimed]}>
-                      <Ionicons name="checkmark-circle" size={14} color="#ccc" />
+                      <Ionicons name="checkmark-circle" size={14} color={themeColors.textSecondary} />
                       <Text style={[styles.buttonText, { color: '#ccc', marginLeft: 4 }]}>Claimed</Text>
                     </View>
                   ) : (
@@ -436,7 +513,7 @@ export default function FreeNow() {
                   </Pressable>
 
                   <Pressable style={[styles.button, styles.shareBtn]} onPress={() => handleShare(item)}>
-                    <Ionicons name="share-social" size={16} color="#fff" />
+                    <Ionicons name="share-social" size={16} color={themeColors.text} />
                   </Pressable>
                 </View>
               </View>
@@ -448,7 +525,7 @@ export default function FreeNow() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles({
   container: { flex: 1, backgroundColor: "#121212" },
   center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#121212" },
   loadingText: { color: "#fff", marginTop: 15, fontSize: 14, fontWeight: "600" },
@@ -461,11 +538,14 @@ const styles = StyleSheet.create({
   dropdown: { backgroundColor: "#1e1e1e", borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#333' },
   dropdownText: { color: "#fff" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center" },
-  modalBox: { width: "80%", backgroundColor: "#1e1e1e", borderRadius: 12, padding: 10 },
+  modalBox: { width: "88%", maxWidth: 420, maxHeight: "88%", backgroundColor: "#1e1e1e", borderRadius: 12, padding: 10 },
   notificationTitle: { color: "#fff", fontSize: 18, fontWeight: "800", paddingHorizontal: 12, paddingTop: 10 },
   notificationSubtitle: { color: "#aaa", fontSize: 12, lineHeight: 18, paddingHorizontal: 12, paddingTop: 6, paddingBottom: 4 },
-  option: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#333" },
+  notificationGroupTitle: { color: "#f5c518", fontSize: 12, fontWeight: "800", paddingHorizontal: 12, paddingTop: 14, paddingBottom: 4 },
+  option: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "#333", flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   optionText: { color: "#fff", fontSize: 16 },
+  primaryButton: { minHeight: 46, backgroundColor: "#f5c518", borderRadius: 11, alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  primaryButtonText: { color: "#111", fontSize: 14, fontWeight: "800" },
   errorBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#2a1414", marginHorizontal: 15, marginBottom: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: "#442020" },
   errorText: { color: "#ff8888", fontSize: 12, flex: 1 },
   emptyText: { color: "#666", textAlign: "center", marginTop: 40, fontSize: 13 },
@@ -473,12 +553,15 @@ const styles = StyleSheet.create({
   categoryHeadingText: { color: "#fff", fontSize: 18, fontWeight: "800" },
   categoryCount: { color: "#111", backgroundColor: "#f5c518", borderRadius: 10, overflow: "hidden", minWidth: 22, textAlign: "center", paddingHorizontal: 6, paddingVertical: 2, fontSize: 11, fontWeight: "800" },
   card: { flexDirection: "row", backgroundColor: "#1e1e1e", borderRadius: 12, marginBottom: 12, padding: 12, marginHorizontal: 15, borderWidth: 1, borderColor: '#2a2a2a' },
+  desktopCard: { marginHorizontal: 0, padding: 16, alignItems: "center" },
   image: { width: 85, height: 85, borderRadius: 8, marginRight: 12 },
+  desktopImage: { width: 190, height: 112, borderRadius: 10, marginRight: 16 },
   title: { color: "#fff", fontWeight: "bold", fontSize: 15 },
   platform: { color: "#f5c518", fontSize: 11, marginVertical: 5 },
-  actionRow: { flexDirection: "row", gap: 8, marginTop: 10 },
-  button: { backgroundColor: "#f5c518", paddingVertical: 8, borderRadius: 8, paddingHorizontal: 15, justifyContent: 'center', flexDirection: 'row', alignItems: 'center' },
+  cardContent: { flex: 1, minWidth: 0 },
+  actionRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 10 },
+  button: { backgroundColor: "#f5c518", paddingVertical: 8, borderRadius: 8, paddingHorizontal: 11, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   buttonText: { color: "#000", fontWeight: "bold", fontSize: 12 },
   claimed: { backgroundColor: "#333", borderWidth: 1, borderColor: '#444' },
-  shareBtn: { backgroundColor: "#1e1e1e", borderWidth: 1, borderColor: "#444" },
+  shareBtn: { width: 38, height: 36, paddingHorizontal: 0, backgroundColor: "#1e1e1e", borderWidth: 1, borderColor: "#444" },
 });

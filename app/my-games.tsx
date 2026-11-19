@@ -1,26 +1,41 @@
 import { auth, db } from "@/lib/firebase";
+import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
+import GamePalLoader from "@/components/GamePalLoader";
 import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { findCatalogGameByTitle } from "@/lib/game-catalog";
 import { collection, deleteDoc, doc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, Image, Platform, Pressable, Text, View } from "react-native";
 
 type GameEntry = {
   id: string;
   title: string;
   thumbnail?: string | null;
   platforms?: string | string[];
+  giveawayType?: string;
   status: string;
 };
 
-const FILTERS = ["All", "Playing", "To Play", "Completed", "Claimed"];
+const FILTERS = ["All", "Playing", "To Play", "Completed", "Claimed Offers", "Claimed DLC"];
+
+function isClaimedDlc(game: GameEntry): boolean {
+  if (game.giveawayType === "loot") return true;
+  if (game.giveawayType && game.giveawayType !== "other") return false;
+  // Older claims did not store a type, so use the offer title as a migration fallback.
+  return /\b(dlc|downloadable content|expansion|season pass|add[ -]?on|loot|cosmetic pack|content pack)\b/i.test(game.title);
+}
 
 export default function MyGames() {
+  useAppTheme();
+  const showAlert = useThemedAlert();
   const router = useRouter();
   const [games, setGames] = useState<GameEntry[]>([]);
   const [filter, setFilter] = useState("All");
   const [loading, setLoading] = useState(true);
+  const [openingGameId, setOpeningGameId] = useState<string | null>(null);
+  const resolvedCatalogIds = useRef(new Map<string, string>());
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -46,15 +61,54 @@ export default function MyGames() {
       (error) => {
         console.error("Could not load game library:", error);
         setLoading(false);
-        Alert.alert("Could not load games", "Check your connection and Firestore rules, then try again.");
+        showAlert("Could not load games", "Check your connection and Firestore rules, then try again.");
       },
     );
   }, []);
 
   const visibleGames = useMemo(
-    () => filter === "All" ? games : games.filter((game) => game.status === filter),
+    () => {
+      if (filter === "All") return games;
+      if (filter === "Claimed Offers") return games.filter((game) => game.status === "Claimed" && !isClaimedDlc(game));
+      if (filter === "Claimed DLC") return games.filter((game) => game.status === "Claimed" && isClaimedDlc(game));
+      return games.filter((game) => game.status === filter);
+    },
     [filter, games],
   );
+
+  const gameCountForFilter = (item: string) => {
+    if (item === "All") return games.length;
+    if (item === "Claimed Offers") return games.filter((game) => game.status === "Claimed" && !isClaimedDlc(game)).length;
+    if (item === "Claimed DLC") return games.filter((game) => game.status === "Claimed" && isClaimedDlc(game)).length;
+    return games.filter((game) => game.status === item).length;
+  };
+
+  const openGameDetails = async (game: GameEntry) => {
+    if (game.status !== "Claimed") {
+      router.push({ pathname: "/details", params: { id: game.id } });
+      return;
+    }
+
+    setOpeningGameId(game.id);
+    try {
+      let catalogId = resolvedCatalogIds.current.get(game.id);
+      if (!catalogId) {
+        const catalogGame = await findCatalogGameByTitle(game.title);
+        if (!catalogGame) {
+          showAlert("Couldn’t confidently match this game", `We didn’t open a possibly different title for “${game.title}”. Try searching for it from Home.`);
+          return;
+        }
+        catalogId = String(catalogGame.id);
+        resolvedCatalogIds.current.set(game.id, catalogId);
+      }
+      router.push({ pathname: "/details", params: { id: catalogId } });
+    } catch (error) {
+      console.error("Could not find claimed game in catalog:", error);
+      showAlert("Could not open game", error instanceof Error ? error.message : "Check your connection and try again.");
+    } finally {
+      setOpeningGameId(null);
+    }
+  };
 
   const moveGame = async (game: GameEntry, status: string) => {
     const user = auth.currentUser;
@@ -66,14 +120,14 @@ export default function MyGames() {
       });
     } catch (error) {
       console.error("Could not update game status:", error);
-      Alert.alert("Could not update game", "Please try again.");
+      showAlert("Could not update game", "Please try again.");
     }
   };
 
   const removeGame = (game: GameEntry) => {
     const user = auth.currentUser;
     if (!user) return;
-    Alert.alert("Remove game", `Remove ${game.title} from My Games?`, [
+    showAlert("Remove game", `Remove ${game.title} from My Games?`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",
@@ -83,7 +137,7 @@ export default function MyGames() {
             await deleteDoc(doc(db, "users", user.uid, "gameStatus", game.id));
           } catch (error) {
             console.error("Could not remove game:", error);
-            Alert.alert("Could not remove game", "Please try again.");
+            showAlert("Could not remove game", "Please try again.");
           }
         },
       },
@@ -91,10 +145,10 @@ export default function MyGames() {
   };
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, Platform.OS === "web" && { width: "100%", maxWidth: 1120, alignSelf: "center" }]}>
       <View style={styles.header}>
         <Pressable style={styles.backButton} onPress={() => router.back()} accessibilityLabel="Back to profile">
-          <Ionicons name="arrow-back" size={22} color="#f5c518" />
+          <Ionicons name="arrow-back" size={22} color={themeColors.accentText} />
         </Pressable>
         <View style={styles.headerText}>
           <Text style={styles.title}>My Games</Text>
@@ -113,14 +167,14 @@ export default function MyGames() {
           <Pressable onPress={() => setFilter(item)} style={[styles.filterChip, filter === item && styles.filterChipActive]}>
             <Text style={[styles.filterText, filter === item && styles.filterTextActive]}>{item}</Text>
             <Text style={[styles.filterCount, filter === item && styles.filterTextActive]}>
-              {item === "All" ? games.length : games.filter((game) => game.status === item).length}
+              {gameCountForFilter(item)}
             </Text>
           </Pressable>
         )}
       />
 
       {loading ? (
-        <View style={styles.loading}><ActivityIndicator color="#f5c518" size="large" /></View>
+        <View style={styles.loading}><GamePalLoader size={122} label="Loading your games" /></View>
       ) : (
         <FlatList
           data={visibleGames}
@@ -129,23 +183,23 @@ export default function MyGames() {
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={filter === "All" ? (
             <View style={styles.emptyState}>
-              <View style={styles.emptyIcon}><Ionicons name="game-controller-outline" size={34} color="#f5c518" /></View>
+              <View style={styles.emptyIcon}><Ionicons name="game-controller-outline" size={34} color={themeColors.accentText} /></View>
               <Text style={styles.emptyTitle}>Your library starts here</Text>
               <Text style={styles.emptyDescription}>Save a game you’re playing, want to try, or find in Giveaways. It’ll appear here as a card.</Text>
               <View style={styles.emptyActions}>
                 <Pressable style={styles.primaryButton} onPress={() => router.replace("/(tabs)")}>
-                  <Ionicons name="search" size={16} color="#111" />
+                  <Ionicons name="search" size={16} color={themeColors.onAccent} />
                   <Text style={styles.primaryButtonText}>Find games</Text>
                 </Pressable>
                 <Pressable style={styles.secondaryButton} onPress={() => router.replace("/free_now")}>
-                  <Ionicons name="gift-outline" size={16} color="#f5c518" />
+                  <Ionicons name="gift-outline" size={16} color={themeColors.accentText} />
                   <Text style={styles.secondaryButtonText}>Giveaways</Text>
                 </Pressable>
               </View>
             </View>
           ) : (
             <View style={styles.filteredEmpty}>
-              <Ionicons name="albums-outline" size={26} color="#777" />
+              <Ionicons name="albums-outline" size={26} color={themeColors.muted} />
               <Text style={styles.filteredEmptyText}>No {filter.toLowerCase()} games yet.</Text>
               <Text style={styles.filteredEmptyHint}>Choose another status above to browse your library.</Text>
             </View>
@@ -155,12 +209,13 @@ export default function MyGames() {
               <View style={styles.gameCard}>
                 <Pressable
                   style={styles.gameInfo}
-                  onPress={() => router.push({ pathname: "/details", params: { id: item.id } })}
+                  onPress={() => void openGameDetails(item)}
+                  disabled={openingGameId === item.id}
                 >
                   {item.thumbnail ? (
                     <Image source={{ uri: item.thumbnail }} style={styles.image} />
                   ) : (
-                    <View style={[styles.image, styles.imageFallback]}><Ionicons name="game-controller" size={26} color="#777" /></View>
+                    <View style={[styles.image, styles.imageFallback]}><Ionicons name="game-controller" size={26} color={themeColors.muted} /></View>
                   )}
                   <View style={styles.gameText}>
                     <Text style={styles.gameTitle} numberOfLines={2}>{item.title}</Text>
@@ -169,7 +224,7 @@ export default function MyGames() {
                     </Text>
                     <View style={styles.statusPill}><Text style={styles.statusText}>{item.status}</Text></View>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#777" />
+                  {openingGameId === item.id ? <ActivityIndicator size="small" color={themeColors.accentText} /> : <Ionicons name="chevron-forward" size={18} color={themeColors.muted} />}
                 </Pressable>
                 <View style={styles.actions}>
                   <Action label="Playing" icon="play" onPress={() => void moveGame(item, "Playing")} />
@@ -189,13 +244,13 @@ export default function MyGames() {
 function Action({ label, icon, destructive, onPress }: { label: string; icon: keyof typeof Ionicons.glyphMap; destructive?: boolean; onPress: () => void }) {
   return (
     <Pressable style={styles.action} onPress={onPress}>
-      <Ionicons name={icon} size={15} color={destructive ? "#ff6666" : "#f5c518"} />
+      <Ionicons name={icon} size={15} color={destructive ? themeColors.danger : themeColors.accentText} />
       <Text style={[styles.actionText, destructive && styles.destructiveText]}>{label}</Text>
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles({
   screen: { flex: 1, backgroundColor: "#121212" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 18, paddingTop: 22, paddingBottom: 16, gap: 12 },
   backButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: "#1e1e1e", alignItems: "center", justifyContent: "center" },

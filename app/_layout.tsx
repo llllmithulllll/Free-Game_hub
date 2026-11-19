@@ -1,24 +1,39 @@
 import { auth, db } from "@/lib/firebase";
+import { ThemeProvider, useAppTheme } from "@/lib/theme";
+import GamePalLoader from "../components/GamePalLoader";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Platform, View } from "react-native";
+import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function RootLayout() {
+  return (
+    <ThemeProvider>
+      <RootNavigator />
+    </ThemeProvider>
+  );
+}
+
+function RootNavigator() {
+  const { colors } = useAppTheme();
   const router = useRouter();
   const segments = useSegments();
   const root = segments[0];
   const route = segments[1];
   const isAuthenticatedAppRoute =
     root === "(tabs)" ||
-    ["preferences", "details", "edit-profile", "friend-profile", "my-games"].includes(root ?? "");
+    ["preferences", "appearance", "pc-compatibility", "details", "edit-profile", "friend-profile", "my-games"].includes(root ?? "");
 
   useEffect(() => {
+    // Expo Notifications exposes these response APIs on native platforms only.
+    // Skip the listener setup on web, where notification navigation is not wired.
+    if (Platform.OS === "web") return;
+
     const openNotificationRoute = (notification: Notifications.Notification) => {
       const url = notification.request.content.data?.url;
       if (typeof url === "string") router.push(url as never);
@@ -45,6 +60,7 @@ export default function RootLayout() {
   // array reference on every route change, which used to re-run this whole
   // check each time).
   const lastCheckedUid = useRef<string | null>(null);
+  const avatarSetupCheckedUid = useRef<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -77,6 +93,22 @@ export default function RootLayout() {
       // Already validated this user this session — just make sure we're not
       // stuck on a loading screen, without re-reading Firestore.
       if (lastCheckedUid.current === user.uid) {
+        if (avatarSetupCheckedUid.current === user.uid || root === "preferences" || root === "edit-profile") {
+          setLoading(false);
+          setIsAuthReady(true);
+          return;
+        }
+        try {
+          const publicProfile = await getDoc(doc(db, "publicProfiles", user.uid));
+          const data = publicProfile.exists() ? publicProfile.data() : {};
+          if (data.avatarProvider !== "tenor" || typeof data.avatarId !== "string") {
+            router.replace({ pathname: "/edit-profile", params: { requireAvatar: "1" } });
+          } else {
+            avatarSetupCheckedUid.current = user.uid;
+          }
+        } catch (error) {
+          console.error("Profile avatar setup check failed:", error);
+        }
         setLoading(false);
         setIsAuthReady(true);
         return;
@@ -108,8 +140,14 @@ export default function RootLayout() {
             router.replace("/preferences");
           }
         } else {
-          // If prefs exist and they are stuck on auth/loading screens, move to tabs
-          if (!isAuthenticatedAppRoute) {
+          const publicProfile = await getDoc(doc(db, "publicProfiles", user.uid));
+          const publicData = publicProfile.exists() ? publicProfile.data() : {};
+          const hasAvatar = publicData.avatarProvider === "tenor" && typeof publicData.avatarId === "string";
+          if (hasAvatar) avatarSetupCheckedUid.current = user.uid;
+          if (!hasAvatar && root !== "edit-profile") {
+            router.replace({ pathname: "/edit-profile", params: { requireAvatar: "1" } });
+          } else if (!isAuthenticatedAppRoute) {
+            // If prefs and profile setup exist and user is on an auth screen, move to tabs.
             router.replace("/(tabs)");
           }
         }
@@ -127,21 +165,21 @@ export default function RootLayout() {
   if (loading || !isAuthReady) {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#121212" }}>
-          <ActivityIndicator size="large" color="#f5c518" />
-        </View>
+        <StatusBar style="light" />
+        <GamePalLoader size={170} label="Getting GamePal ready" variant="startup" />
       </GestureHandlerRootView>
     );
   }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: "#121212" }}>
-        <StatusBar style="light" />
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+        <StatusBar style={colors.statusBar} />
         <Stack screenOptions={{
           headerShown: false,
           animation: "slide_from_right",
           animationDuration: 220,
+          contentStyle: { backgroundColor: colors.background },
         }} />
       </SafeAreaView>
     </GestureHandlerRootView>

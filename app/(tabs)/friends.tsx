@@ -1,5 +1,6 @@
 import { auth, db } from "@/lib/firebase";
 import { friendshipDocumentId } from "@/lib/social";
+import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   loadNotificationSettings,
@@ -9,6 +10,8 @@ import {
   showLocalNotification,
 } from "@/lib/local-notifications";
 import { Ionicons } from "@expo/vector-icons";
+import GamingBackdrop from "@/components/GamingBackdrop";
+import ProfileAvatar from "@/components/ProfileAvatar";
 import { useRouter } from "expo-router";
 import {
   collection,
@@ -25,12 +28,14 @@ import {
   where,
 } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
-type FriendEntry = { uid: string; displayName: string; username: string; status: string; requesterId: string; recipientId: string };
-type SearchEntry = { uid: string; displayName: string; username: string; usernameLower: string };
+type FriendEntry = { uid: string; displayName: string; username: string; avatarId?: string; avatarPreviewUrl?: string; avatarUrl?: string; status: string; requesterId: string; recipientId: string };
+type SearchEntry = { uid: string; displayName: string; username: string; usernameLower: string; avatarId?: string; avatarPreviewUrl?: string; avatarUrl?: string };
 
 export default function Friends() {
+  useAppTheme();
+  const showAlert = useThemedAlert();
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<SearchEntry[]>([]);
@@ -54,7 +59,7 @@ export default function Friends() {
     }
     const granted = await requestLocalNotificationPermission();
     if (!granted) {
-      Alert.alert("Notifications are off", "Allow notifications in Android settings to receive friend request alerts.");
+      showAlert("Notifications are off", "Allow notifications in Android settings to receive friend request alerts.");
       return;
     }
     await updateNotificationSettings({ ...notificationsRef.current, friendRequests: true });
@@ -127,6 +132,9 @@ export default function Friends() {
           uid: otherUid,
           displayName: profile.displayName || "Gamer",
           username: profile.username || "",
+          avatarId: profile.avatarId || "",
+          avatarPreviewUrl: profile.avatarPreviewUrl || profile.avatarUrl || "",
+          avatarUrl: profile.avatarUrl || "",
           status: data.status,
           requesterId: data.requesterId,
           recipientId: data.recipientId,
@@ -137,7 +145,7 @@ export default function Friends() {
     }, (error) => {
       console.error("Friend list listener failed:", error);
       setLoading(false);
-      Alert.alert("Could not load friends", "Firestore denied the friend list. Publish the latest firestore.rules in Firebase Console, then reopen Friends.");
+      showAlert("Could not load friends", "Firestore denied the friend list. Publish the latest firestore.rules in Firebase Console, then reopen Friends.");
     });
     return unsubscribe;
   }, []);
@@ -163,7 +171,7 @@ export default function Friends() {
         }
       } catch (error: any) {
         console.error("Friend search failed:", error);
-        if (!cancelled) Alert.alert("Search unavailable", error?.code === "permission-denied"
+        if (!cancelled) showAlert("Search unavailable", error?.code === "permission-denied"
           ? "Firebase denied public profile search. Publish the latest firestore.rules in Firebase Console."
           : "Check your connection and try searching again.");
       } finally {
@@ -187,7 +195,7 @@ export default function Friends() {
       });
     } catch (error: any) {
       console.error("Friend request failed:", error);
-      Alert.alert("Could not send request", error?.code === "permission-denied"
+      showAlert("Could not send request", error?.code === "permission-denied"
         ? "Firebase denied the request. Publish the latest firestore.rules in Firebase Console."
         : "A request may already exist, or the other account has not opened Friends yet to create a searchable profile.");
     }
@@ -201,7 +209,7 @@ export default function Friends() {
       });
     } catch (error) {
       console.error("Accept request failed:", error);
-      Alert.alert("Could not accept request", "Check that the latest Firestore rules are published.");
+      showAlert("Could not accept request", "Check that the latest Firestore rules are published.");
     }
   };
 
@@ -210,7 +218,7 @@ export default function Friends() {
       await deleteDoc(doc(db, "friendships", friendshipDocumentId(auth.currentUser!.uid, entry.uid)));
     } catch (error) {
       console.error("Remove friend request failed:", error);
-      Alert.alert("Could not update request", "Please try again.");
+      showAlert("Could not update request", "Please try again.");
     }
   };
 
@@ -223,7 +231,7 @@ export default function Friends() {
   const renderFriend = (entry: FriendEntry) => (
     <View key={entry.uid} style={styles.personRow}>
       <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-        <View style={styles.avatar}><Ionicons name="person" size={18} color="#121212" /></View>
+        <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
         <View style={{ flex: 1 }}>
           <Text style={styles.personName}>{entry.displayName}</Text>
           <Text style={styles.personUsername}>@{entry.username}</Text>
@@ -234,30 +242,34 @@ export default function Friends() {
   );
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <ScrollView style={[styles.screen, Platform.OS === "web" && { width: "100%", maxWidth: 1040, alignSelf: "center" }]} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <GamingBackdrop />
       <View style={styles.titleRow}>
         <Text style={styles.title}>Friends</Text>
         <Pressable style={[styles.notificationButton, notificationSettings.friendRequests && styles.notificationButtonOn]} onPress={toggleFriendNotifications}>
-          <Ionicons name={notificationSettings.friendRequests ? "notifications" : "notifications-outline"} size={18} color={notificationSettings.friendRequests ? "#111" : "#f5c518"} />
+          <Ionicons name={notificationSettings.friendRequests ? "notifications" : "notifications-outline"} size={18} color={notificationSettings.friendRequests ? themeColors.onAccent : themeColors.accentText} />
           <Text style={[styles.notificationText, notificationSettings.friendRequests && styles.notificationTextOn]}>{notificationSettings.friendRequests ? "Alerts on" : "Alerts off"}</Text>
         </Pressable>
       </View>
-      <Text style={styles.subtitle}>Find players by username. Only accepted friends can see game libraries and contact links. Friend request alerts are checked while the app is active.</Text>
-      {myUsername ? <Text style={styles.myUsername}>Your username: <Text style={{ color: "#fff", fontWeight: "700" }}>@{myUsername}</Text></Text> : null}
+      <Text style={styles.subtitle}>Find players by username. Existing accounts appear after they open Friends in the updated app once. Only accepted friends can see game libraries and contact links.</Text>
+      {myUsername ? <Text style={styles.myUsername}>Your username: <Text style={{ color: themeColors.text, fontWeight: "700" }}>@{myUsername}</Text></Text> : null}
       <View style={styles.searchBox}>
-        <Ionicons name="search" size={20} color="#888" />
-        <TextInput value={search} onChangeText={setSearch} placeholder="Search usernames" placeholderTextColor="#777" autoCapitalize="none" style={styles.searchInput} />
-        {searching && <ActivityIndicator color="#f5c518" size="small" />}
+        <Ionicons name="search" size={20} color={themeColors.muted} />
+        <TextInput value={search} onChangeText={setSearch} placeholder="Search usernames" placeholderTextColor={themeColors.muted} autoCapitalize="none" style={styles.searchInput} />
+        {searching && <ActivityIndicator color={themeColors.accentText} size="small" />}
       </View>
 
       {results.length > 0 && <Text style={styles.section}>PEOPLE</Text>}
+      {search.trim().replace(/^@/, "").length >= 2 && !searching && results.length === 0 && (
+        <Text style={styles.searchHint}>No matching players yet. Check the username, or ask them to open Friends in the updated app once.</Text>
+      )}
       {results.map((person) => {
         const relationship = relationships.find((entry) => entry.uid === person.uid);
         const isIncoming = relationship?.status === "pending" && relationship.recipientId === me;
         return (
           <View key={person.uid} style={styles.personRow}>
             <View style={styles.personDetails}>
-              <View style={styles.avatar}><Ionicons name="person" size={18} color="#121212" /></View>
+              <ProfileAvatar uri={person.avatarPreviewUrl || person.avatarUrl} gifId={person.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
               <View style={{ flex: 1 }}><Text style={styles.personName}>{person.displayName}</Text><Text style={styles.personUsername}>@{person.username}</Text></View>
             </View>
             {relationship?.status === "accepted" ? <Text style={styles.stateText}>Friends</Text>
@@ -273,11 +285,11 @@ export default function Friends() {
       {incoming.map((entry) => (
         <View key={entry.uid} style={styles.personRow}>
           <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-            <View style={styles.avatar}><Ionicons name="person" size={18} color="#121212" /></View>
+            <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
             <View style={{ flex: 1 }}><Text style={styles.personName}>{entry.displayName}</Text><Text style={styles.personUsername}>@{entry.username}</Text></View>
           </Pressable>
           <Pressable style={styles.smallButton} onPress={() => acceptRequest(entry)}><Text style={styles.smallButtonText}>Accept</Text></Pressable>
-          <Pressable style={styles.dismissButton} onPress={() => removeRequest(entry)}><Ionicons name="close" size={18} color="#aaa" /></Pressable>
+          <Pressable style={styles.dismissButton} onPress={() => removeRequest(entry)}><Ionicons name="close" size={18} color={themeColors.muted} /></Pressable>
         </View>
       ))}
 
@@ -285,22 +297,22 @@ export default function Friends() {
       {outgoing.map((entry) => (
         <View key={entry.uid} style={styles.personRow}>
           <Pressable style={styles.personDetails} onPress={() => goToProfile(entry.uid)}>
-            <View style={styles.avatar}><Ionicons name="person" size={18} color="#121212" /></View>
+            <ProfileAvatar uri={entry.avatarPreviewUrl || entry.avatarUrl} gifId={entry.avatarId} size={38} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
             <View style={{ flex: 1 }}><Text style={styles.personName}>{entry.displayName}</Text><Text style={styles.personUsername}>@{entry.username}</Text></View>
           </Pressable>
           <Text style={styles.stateText}>Pending</Text>
-          <Pressable style={styles.dismissButton} onPress={() => removeRequest(entry)}><Ionicons name="close" size={18} color="#aaa" /></Pressable>
+          <Pressable style={styles.dismissButton} onPress={() => removeRequest(entry)}><Ionicons name="close" size={18} color={themeColors.muted} /></Pressable>
         </View>
       ))}
 
       <Text style={styles.section}>YOUR FRIENDS · {friends.length}</Text>
-      {loading ? <ActivityIndicator color="#f5c518" style={{ marginTop: 20 }} /> : friends.length ? friends.map(renderFriend) : <Text style={styles.empty}>No friends yet. Search for a username above to add someone.</Text>}
+      {loading ? <ActivityIndicator color={themeColors.accentText} style={{ marginTop: 20 }} /> : friends.length ? friends.map(renderFriend) : <Text style={styles.empty}>No friends yet. Search for a username above to add someone.</Text>}
       <View style={{ height: 100 }} />
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles({
   screen: { flex: 1, backgroundColor: "#121212" },
   content: { padding: 20, paddingTop: 42 },
   title: { color: "#fff", fontSize: 28, fontWeight: "800" },
@@ -313,10 +325,11 @@ const styles = StyleSheet.create({
   subtitle: { color: "#888", fontSize: 13, lineHeight: 18, marginTop: 6, marginBottom: 20 },
   searchBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#1e1e1e", borderRadius: 12, paddingHorizontal: 13, height: 50, gap: 10 },
   searchInput: { flex: 1, color: "#fff", fontSize: 15 },
+  searchHint: { color: "#888", fontSize: 12, lineHeight: 18, marginTop: 12, paddingHorizontal: 2 },
   section: { color: "#f5c518", fontSize: 11, fontWeight: "800", letterSpacing: 1, marginTop: 27, marginBottom: 10 },
   personRow: { flexDirection: "row", alignItems: "center", minHeight: 66, backgroundColor: "#1b1b1b", borderRadius: 12, marginBottom: 8, paddingHorizontal: 10, paddingVertical: 7, gap: 8 },
   personDetails: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  avatar: { width: 38, height: 38, borderRadius: 13, backgroundColor: "#f5c518", alignItems: "center", justifyContent: "center" },
+  avatar: { borderRadius: 13, backgroundColor: "#f5c518", alignItems: "center", justifyContent: "center" },
   personName: { color: "#fff", fontWeight: "700", fontSize: 14 },
   personUsername: { color: "#888", fontSize: 12, marginTop: 3 },
   smallButton: { backgroundColor: "#f5c518", borderRadius: 9, paddingHorizontal: 13, paddingVertical: 8 },

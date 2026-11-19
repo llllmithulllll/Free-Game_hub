@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "GameHub",
+    "name": "GamePal",
     "slug": "app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/logo_f.png",
+    "icon": "./assets/gamepal/logo-pack/png/gamepal-app-icon-dark-1024.png",
     "scheme": "app",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
@@ -14,8 +14,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#121212",
-        "foregroundImage": "./assets/images/logo_f.png"
+        "backgroundColor": "#0B0F19",
+        "foregroundImage": "./assets/gamepal/gamepal-adaptive-foreground-1024.png",
+        "monochromeImage": "./assets/gamepal/gamepal-adaptive-monochrome-1024.png"
       },
       "package": "com.llllmithulllll.freegamehub",
       "permissions": [
@@ -25,17 +26,21 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/gamepal/logo-pack/png/gamepal-icon-color-transparent-1024.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/logo_f.png",
-          "imageWidth": 200,
+          "image": "./assets/gamepal/logo-pack/png/gamepal-logo-color-transparent-1024.png",
+          "imageWidth": 220,
           "resizeMode": "contain",
-          "backgroundColor": "#121212"
+          "backgroundColor": "#0B0F19",
+          "dark": {
+            "image": "./assets/gamepal/logo-pack/png/gamepal-logo-color-transparent-1024.png",
+            "backgroundColor": "#0B0F19"
+          }
         }
       ]
     ],

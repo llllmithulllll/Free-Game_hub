@@ -1,5 +1,8 @@
 import { auth, db } from "@/lib/firebase";
+import { ACCENT_THEMES, createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
+import GamingBackdrop from "@/components/GamingBackdrop";
+import ProfileAvatar from "@/components/ProfileAvatar";
 import { useFocusEffect, useRouter } from "expo-router";
 
 import {
@@ -25,12 +28,10 @@ import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 
 import {
   ActivityIndicator,
-  Alert,
   Modal,
+  Platform,
   Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
+  ScrollView,  Text,
   TextInput,
   Switch,
   TouchableOpacity,
@@ -55,7 +56,10 @@ const CATEGORIES = [
 // ============================================================
 
 export default function Profile() {
+  const { mode, accentTheme, colors } = useAppTheme();
+  const showAlert = useThemedAlert();
   const router = useRouter();
+  const modeLabel = mode === "system" ? "Auto" : mode === "light" ? "Light" : "Dark";
 
   // ==========================================================
   // GAME COLLECTIONS
@@ -77,6 +81,8 @@ export default function Profile() {
   const [userName, setUserName] = useState(
     auth.currentUser?.displayName || "Gamer"
   );
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarId, setAvatarId] = useState<string | null>(null);
 
 
   // ==========================================================
@@ -99,9 +105,13 @@ export default function Profile() {
     Promise.all([
       getDoc(doc(db, "users", user.uid)),
       getDoc(doc(db, "users", user.uid, "preferences", "data")),
-    ]).then(([snapshot, preferences]) => {
+      getDoc(doc(db, "publicProfiles", user.uid)),
+    ]).then(([snapshot, preferences, publicProfile]) => {
       const data = snapshot.exists() ? snapshot.data() : {};
+      const publicData = publicProfile.exists() ? publicProfile.data() : {};
       setUserName(data.displayName || user.displayName || "Gamer");
+      setAvatarPreviewUrl(publicData.avatarPreviewUrl || publicData.avatarUrl || null);
+      setAvatarId(publicData.avatarId || null);
       setDateOfBirth(dateOfBirthFromStorage(data.dateOfBirth) || null);
       setSexualContentFilter(preferences.exists() ? preferences.data().sexualContentFilter !== false : true);
     }).catch((error) => console.error("Profile refresh failed:", error));
@@ -285,7 +295,7 @@ export default function Profile() {
       newEmail.trim();
 
     if (!email) {
-      Alert.alert(
+      showAlert(
         "Invalid Email",
         "Please enter an email address."
       );
@@ -297,7 +307,7 @@ export default function Profile() {
       email ===
       user.email
     ) {
-      Alert.alert(
+      showAlert(
         "No Changes",
         "This is already your current email address."
       );
@@ -331,7 +341,7 @@ export default function Profile() {
         }
       );
 
-      Alert.alert(
+      showAlert(
         "Email Updated",
         "Your email address has been updated."
       );
@@ -345,7 +355,7 @@ export default function Profile() {
         error?.code ===
         "auth/requires-recent-login"
       ) {
-        Alert.alert(
+        showAlert(
           "Sign In Again",
           "For security, please log out and sign in again before changing your email."
         );
@@ -357,7 +367,7 @@ export default function Profile() {
         error?.code ===
         "auth/email-already-in-use"
       ) {
-        Alert.alert(
+        showAlert(
           "Email Already Used",
           "Another account is already using this email."
         );
@@ -369,7 +379,7 @@ export default function Profile() {
         error?.code ===
         "auth/invalid-email"
       ) {
-        Alert.alert(
+        showAlert(
           "Invalid Email",
           "Please enter a valid email address."
         );
@@ -377,7 +387,7 @@ export default function Profile() {
         return;
       }
 
-      Alert.alert(
+      showAlert(
         "Error",
         error?.message ||
           "Failed to update email."
@@ -401,7 +411,7 @@ export default function Profile() {
     if (
       newPassword.length < 6
     ) {
-      Alert.alert(
+      showAlert(
         "Password Too Short",
         "Your password must contain at least 6 characters."
       );
@@ -413,7 +423,7 @@ export default function Profile() {
       newPassword !==
       confirmPassword
     ) {
-      Alert.alert(
+      showAlert(
         "Passwords Don't Match",
         "Please make sure both passwords are the same."
       );
@@ -432,7 +442,7 @@ export default function Profile() {
       setNewPassword("");
       setConfirmPassword("");
 
-      Alert.alert(
+      showAlert(
         "Password Updated",
         "Your password has been changed successfully."
       );
@@ -446,7 +456,7 @@ export default function Profile() {
         error?.code ===
         "auth/requires-recent-login"
       ) {
-        Alert.alert(
+        showAlert(
           "Sign In Again",
           "For security, please log out and sign in again before changing your password."
         );
@@ -458,7 +468,7 @@ export default function Profile() {
         error?.code ===
         "auth/weak-password"
       ) {
-        Alert.alert(
+        showAlert(
           "Weak Password",
           "Please choose a stronger password."
         );
@@ -466,7 +476,7 @@ export default function Profile() {
         return;
       }
 
-      Alert.alert(
+      showAlert(
         "Error",
         error?.message ||
           "Failed to update password."
@@ -579,7 +589,7 @@ export default function Profile() {
           false
         );
 
-        Alert.alert(
+        showAlert(
           "Preferences Updated",
           "Your game preferences have been saved."
         );
@@ -589,7 +599,7 @@ export default function Profile() {
           error
         );
 
-        Alert.alert(
+        showAlert(
           "Error",
           "Failed to update preferences."
         );
@@ -613,7 +623,7 @@ export default function Profile() {
       );
     } catch {
       setSexualContentFilter(!nextValue);
-      Alert.alert("Error", "Could not update content filtering.");
+      showAlert("Error", "Could not update content filtering.");
     }
   };
 
@@ -622,7 +632,7 @@ export default function Profile() {
   // ==========================================================
 
   const handleLogout = () => {
-    Alert.alert(
+    showAlert(
       "Log Out",
       "Are you sure you want to log out?",
       [
@@ -642,7 +652,7 @@ export default function Profile() {
                 "/login"
               );
             } catch (error) {
-              Alert.alert(
+              showAlert(
                 "Error",
                 "Failed to log out."
               );
@@ -670,13 +680,12 @@ export default function Profile() {
   return (
     <>
       <ScrollView
-        style={
-          styles.container
-        }
+        style={[styles.container, Platform.OS === "web" && { width: "100%", maxWidth: 1080, alignSelf: "center" }]}
         showsVerticalScrollIndicator={
           false
         }
       >
+        <GamingBackdrop />
         {/* PROFILE HEADER */}
 
         <View
@@ -684,17 +693,7 @@ export default function Profile() {
             styles.header
           }
         >
-          <View
-            style={
-              styles.avatar
-            }
-          >
-            <Ionicons
-              name="person"
-              size={32}
-              color="#121212"
-            />
-          </View>
+          <ProfileAvatar uri={avatarPreviewUrl} gifId={avatarId} size={64} iconColor={themeColors.onAccent} backgroundColor={themeColors.accent} style={styles.avatar} />
 
           <View
             style={
@@ -704,9 +703,7 @@ export default function Profile() {
             <Text style={styles.userName}>{userName}</Text>
 
             <Text
-              style={
-                styles.email
-              }
+              style={[styles.email, { color: colors.textSecondary }]}
             >
               {auth.currentUser
                 ?.email ||
@@ -727,6 +724,8 @@ export default function Profile() {
               totalGames
             }
             label="Library"
+            valueColor={colors.text}
+            labelColor={colors.textSecondary}
           />
 
           <View
@@ -740,6 +739,8 @@ export default function Profile() {
               playing.length
             }
             label="Playing"
+            valueColor={colors.text}
+            labelColor={colors.textSecondary}
           />
 
           <View
@@ -753,6 +754,8 @@ export default function Profile() {
               completed.length
             }
             label="Completed"
+            valueColor={colors.text}
+            labelColor={colors.textSecondary}
           />
 
           <View
@@ -766,18 +769,16 @@ export default function Profile() {
               claimed.length
             }
             label="Claimed"
+            valueColor={colors.text}
+            labelColor={colors.textSecondary}
           />
         </View>
 
         {/* ACCOUNT */}
 
-        <Text
-          style={
-            styles.mainSectionTitle
-          }
-        >
-          Account
-        </Text>
+        <View style={[styles.accountHeadingRow, { marginTop: 8, marginBottom: 8 }]}>
+          <Text style={[styles.mainSectionTitle, { color: colors.text }]}>Account</Text>
+        </View>
 
         <View
           style={
@@ -800,7 +801,7 @@ export default function Profile() {
               <Ionicons
                 name="person-outline"
                 size={20}
-                color="#f5c518"
+                color={themeColors.accentText}
               />
             </View>
 
@@ -818,9 +819,7 @@ export default function Profile() {
               </Text>
 
               <Text
-                style={
-                  styles.settingsSubtitle
-                }
+                style={[styles.settingsSubtitle, { color: colors.textSecondary }]}
               >
                 Name, age, username and social links
               </Text>
@@ -829,7 +828,7 @@ export default function Profile() {
             <Ionicons
               name="chevron-forward"
               size={18}
-              color="#777"
+              color={themeColors.muted}
             />
           </TouchableOpacity>
 
@@ -838,6 +837,32 @@ export default function Profile() {
               styles.separator
             }
           />
+
+          <TouchableOpacity style={styles.settingsRow} onPress={() => router.push("/appearance")}>
+            <View style={styles.settingsIcon}>
+              <Ionicons name="color-palette-outline" size={20} color={themeColors.accentText} />
+            </View>
+            <View style={styles.settingsTextContainer}>
+              <Text style={styles.settingsTitle}>Appearance</Text>
+              <Text style={[styles.settingsSubtitle, { color: colors.textSecondary }]}>{modeLabel} mode · {ACCENT_THEMES.find((item) => item.id === accentTheme)?.label || "Classic"} colors</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={themeColors.muted} />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          <TouchableOpacity style={styles.settingsRow} onPress={() => router.push("/pc-compatibility")}>
+            <View style={styles.settingsIcon}>
+              <Ionicons name="hardware-chip-outline" size={20} color={themeColors.accentText} />
+            </View>
+            <View style={styles.settingsTextContainer}>
+              <Text style={styles.settingsTitle}>PC compatibility</Text>
+              <Text style={[styles.settingsSubtitle, { color: colors.textSecondary }]}>Save your specs and check game FPS</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={themeColors.muted} />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
 
           {/* ACCOUNT SETTINGS */}
 
@@ -857,7 +882,7 @@ export default function Profile() {
               <Ionicons
                 name="settings-outline"
                 size={20}
-                color="#f5c518"
+                color={themeColors.accentText}
               />
             </View>
 
@@ -875,9 +900,7 @@ export default function Profile() {
               </Text>
 
               <Text
-                style={
-                  styles.settingsSubtitle
-                }
+                style={[styles.settingsSubtitle, { color: colors.textSecondary }]}
               >
                 Update email and password
               </Text>
@@ -886,7 +909,7 @@ export default function Profile() {
             <Ionicons
               name="chevron-forward"
               size={18}
-              color="#777"
+              color={themeColors.muted}
             />
           </TouchableOpacity>
 
@@ -914,7 +937,7 @@ export default function Profile() {
               <Ionicons
                 name="game-controller-outline"
                 size={20}
-                color="#f5c518"
+                color={themeColors.accentText}
               />
             </View>
 
@@ -932,9 +955,7 @@ export default function Profile() {
               </Text>
 
               <Text
-                style={
-                  styles.settingsSubtitle
-                }
+                style={[styles.settingsSubtitle, { color: colors.textSecondary }]}
               >
                 {selectedCats.length > 0
                   ? `${selectedCats.length} selected`
@@ -945,7 +966,7 @@ export default function Profile() {
             <Ionicons
               name="chevron-forward"
               size={18}
-              color="#777"
+              color={themeColors.muted}
             />
           </TouchableOpacity>
 
@@ -957,11 +978,11 @@ export default function Profile() {
 
           <View style={styles.settingsRow}>
             <View style={styles.settingsIcon}>
-              <Ionicons name="eye-off-outline" size={20} color="#f5c518" />
+              <Ionicons name="eye-off-outline" size={20} color={themeColors.accentText} />
             </View>
             <View style={styles.settingsTextContainer}>
               <Text style={styles.settingsTitle}>Hide sexual content</Text>
-              <Text style={styles.settingsSubtitle}>
+              <Text style={[styles.settingsSubtitle, { color: colors.textSecondary }]}>
                 {isUnder18OrUnknown ? "Always on for under-18 or unknown age" : "Filter games tagged with sexual content"}
               </Text>
             </View>
@@ -969,8 +990,8 @@ export default function Profile() {
               value={sexualContentFilter || isUnder18OrUnknown}
               onValueChange={handleToggleSexualContentFilter}
               disabled={isUnder18OrUnknown || loadingPreferences}
-              trackColor={{ false: "#444", true: "#a98712" }}
-              thumbColor={sexualContentFilter ? "#f5c518" : "#aaa"}
+              trackColor={{ false: themeColors.surfaceRaised, true: themeColors.accent }}
+              thumbColor={sexualContentFilter ? themeColors.onAccent : themeColors.muted}
             />
           </View>
 
@@ -999,7 +1020,7 @@ export default function Profile() {
               <Ionicons
                 name="log-out-outline"
                 size={20}
-                color="#ff4444"
+                color={themeColors.danger}
               />
             </View>
 
@@ -1051,7 +1072,7 @@ export default function Profile() {
 
         {loadingPreferences ? (
           <ActivityIndicator
-            color="#f5c518"
+            color={themeColors.accentText}
           />
         ) : selectedCats.length > 0 ? (
           <View
@@ -1113,7 +1134,7 @@ export default function Profile() {
             style={({ pressed }) => [styles.libraryCard, pressed && styles.libraryCardPressed]}
           >
             <View style={styles.libraryIcon}>
-              <Ionicons name="game-controller" size={25} color="#111" />
+              <Ionicons name="game-controller" size={25} color={themeColors.onAccent} />
             </View>
             <View style={styles.libraryCardText}>
               <Text style={styles.libraryCardTitle}>Open your library</Text>
@@ -1122,7 +1143,7 @@ export default function Profile() {
               </Text>
               <Text style={styles.libraryCardMeta}>Browse by status, update or remove games</Text>
             </View>
-            <Ionicons name="chevron-forward" size={21} color="#f5c518" />
+            <Ionicons name="chevron-forward" size={21} color={themeColors.accentText} />
           </Pressable>
         </Animated.View>
 
@@ -1192,7 +1213,7 @@ export default function Profile() {
                 <Ionicons
                   name="close"
                   size={27}
-                  color="#fff"
+                  color={themeColors.text}
                 />
               </TouchableOpacity>
             </View>
@@ -1230,7 +1251,7 @@ export default function Profile() {
                         <Ionicons
                           name="checkmark"
                           size={15}
-                          color="#000"
+                          color={themeColors.onAccent}
                         />
                       )}
 
@@ -1263,7 +1284,7 @@ export default function Profile() {
             >
               {savingPreferences ? (
                 <ActivityIndicator
-                  color="#000"
+                  color={themeColors.onAccent}
                 />
               ) : (
                 <Text
@@ -1338,7 +1359,7 @@ export default function Profile() {
                 <Ionicons
                   name="close"
                   size={27}
-                  color="#fff"
+                  color={themeColors.text}
                 />
               </TouchableOpacity>
             </View>
@@ -1374,7 +1395,7 @@ export default function Profile() {
                 <Ionicons
                   name="mail-outline"
                   size={20}
-                  color="#777"
+                  color={themeColors.muted}
                 />
 
                 <TextInput
@@ -1388,7 +1409,7 @@ export default function Profile() {
                     setNewEmail
                   }
                   placeholder="Email address"
-                  placeholderTextColor="#666"
+                  placeholderTextColor={themeColors.muted}
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={
@@ -1410,7 +1431,7 @@ export default function Profile() {
               >
                 {updatingEmail ? (
                   <ActivityIndicator
-                    color="#000"
+                    color={themeColors.onAccent}
                   />
                 ) : (
                   <Text
@@ -1455,7 +1476,7 @@ export default function Profile() {
                 <Ionicons
                   name="lock-closed-outline"
                   size={20}
-                  color="#777"
+                  color={themeColors.muted}
                 />
 
                 <TextInput
@@ -1469,7 +1490,7 @@ export default function Profile() {
                     setNewPassword
                   }
                   placeholder="New password"
-                  placeholderTextColor="#666"
+                  placeholderTextColor={themeColors.muted}
                   secureTextEntry={
                     !showPassword
                   }
@@ -1490,7 +1511,7 @@ export default function Profile() {
                         : "eye-outline"
                     }
                     size={21}
-                    color="#777"
+                    color={themeColors.muted}
                   />
                 </TouchableOpacity>
               </View>
@@ -1503,7 +1524,7 @@ export default function Profile() {
                 <Ionicons
                   name="lock-closed-outline"
                   size={20}
-                  color="#777"
+                  color={themeColors.muted}
                 />
 
                 <TextInput
@@ -1517,7 +1538,7 @@ export default function Profile() {
                     setConfirmPassword
                   }
                   placeholder="Confirm new password"
-                  placeholderTextColor="#666"
+                  placeholderTextColor={themeColors.muted}
                   secureTextEntry={
                     !showPassword
                   }
@@ -1538,7 +1559,7 @@ export default function Profile() {
               >
                 {updatingPassword ? (
                   <ActivityIndicator
-                    color="#000"
+                    color={themeColors.onAccent}
                   />
                 ) : (
                   <Text
@@ -1571,27 +1592,25 @@ export default function Profile() {
 const StatItem = ({
   value,
   label,
+  valueColor,
+  labelColor,
 }: {
   value: number;
   label: string;
+  valueColor: string;
+  labelColor: string;
 }) => (
   <View
     style={
       styles.statItem
     }
   >
-    <Text
-      style={
-        styles.statNumber
-      }
-    >
+    <Text style={[styles.statNumber, { color: valueColor }]}>
       {value}
     </Text>
 
     <Text
-      style={
-        styles.statLabel
-      }
+      style={[styles.statLabel, { color: labelColor }]}
     >
       {label}
     </Text>
@@ -1602,7 +1621,7 @@ const StatItem = ({
 // STYLES
 // ============================================================
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles({
   container: {
     flex: 1,
     backgroundColor: "#121212",
@@ -1701,6 +1720,8 @@ const styles = StyleSheet.create({
 
   // SECTION TITLES
 
+  accountHeadingRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+
   mainSectionTitle: {
     color: "#fff",
     fontSize: 17,
@@ -1724,6 +1745,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 15,
   },
+
 
   settingsIcon: {
     width: 38,

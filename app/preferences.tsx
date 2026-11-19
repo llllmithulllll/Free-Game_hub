@@ -1,12 +1,15 @@
 import { auth, db } from "@/lib/firebase";
+import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
 import { useRouter } from "expo-router";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 
 const CATEGORIES = ["Action", "Shooter", "MMORPG", "Racing", "Sports", "Strategy"];
 
 export default function Preferences() {
+  useAppTheme();
+  const showAlert = useThemedAlert();
   const router = useRouter();
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -40,9 +43,9 @@ export default function Preferences() {
         updatedAt: serverTimestamp(),
       }, { merge: true });
       
-      router.replace("/(tabs)");
+      router.replace("/pc-compatibility?onboarding=1");
     } catch (e) {
-      Alert.alert("Error", "Failed to sync preferences.");
+      showAlert("Error", "Failed to sync preferences.");
     } finally {
       setSaving(false);
     }
@@ -63,13 +66,13 @@ export default function Preferences() {
         ))}
       </View>
       <Pressable style={styles.btn} onPress={handleSave} disabled={saving}>
-        {saving ? <ActivityIndicator color="#000" /> : <Text style={styles.btnText}>Save & Sync</Text>}
+        {saving ? <ActivityIndicator color={themeColors.onAccent} /> : <Text style={styles.btnText}>Save & Sync</Text>}
       </Pressable>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles({
   container: { flex: 1, backgroundColor: "#121212", padding: 20, justifyContent: "center" },
   title: { color: "#fff", fontSize: 22, fontWeight: "bold", marginBottom: 20, textAlign: "center" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10, justifyContent: "center" },

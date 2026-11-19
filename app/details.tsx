@@ -1,7 +1,10 @@
 import { auth, db } from "@/lib/firebase";
+import { createThemedStyles, themeColors, useAppTheme } from "@/lib/theme";
 import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
+import GamePalLoader from "@/components/GamePalLoader";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { Image } from "expo-image";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   addDoc,
   collection,
@@ -14,20 +17,23 @@ import {
 } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
-  Image,
   Linking,
   Pressable,
+  Platform,
   ScrollView,
   Share,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 
 export default function Details() {
+  const { colors } = useAppTheme();
+  const router = useRouter();
+  const { width } = useWindowDimensions();
   const { id } = useLocalSearchParams();
   const [game, setGame] = useState<any>(null);
   const [screenshots, setScreenshots] = useState<any[]>([]);
@@ -159,29 +165,56 @@ export default function Details() {
     setStatus(newStatus);
   };
 
-  if (loading) return <ActivityIndicator style={{ flex: 1 }} color="#f5c518" />;
+  if (loading) return (
+    <View style={[styles.page, { backgroundColor: colors.background }]}>
+      <Pressable onPress={() => router.back()} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Go back">
+        <Ionicons name="arrow-back" size={20} color={colors.accentText} />
+        <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
+      </Pressable>
+      <GamePalLoader size={130} label="Loading game details" />
+    </View>
+  );
   if (contentBlocked) {
     return (
-      <View style={[styles.container, { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 }]}>
-        <Ionicons name="eye-off-outline" size={42} color="#f5c518" />
+      <View style={[styles.page, { backgroundColor: colors.background, flex: 1, justifyContent: "center", alignItems: "center", padding: 24 }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backButton, styles.blockedBackButton]} accessibilityRole="button" accessibilityLabel="Go back">
+          <Ionicons name="arrow-back" size={20} color={colors.accentText} />
+          <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
+        </Pressable>
+        <Ionicons name="eye-off-outline" size={42} color={themeColors.accentText} />
         <Text style={[styles.sectionTitle, { textAlign: "center", marginTop: 16 }]}>This game is hidden by your content filter</Text>
         <Text style={[styles.meta, { textAlign: "center", marginTop: 8 }]}>You can manage the sexual-content filter in Profile settings.</Text>
       </View>
     );
   }
-  if (!game) return <ActivityIndicator style={{ flex: 1 }} color="#f5c518" />;
+  if (!game) return <View style={[styles.page, { backgroundColor: colors.background }]}><GamePalLoader size={130} label="Loading game details" /></View>;
 
   return (
-    <ScrollView style={styles.container}>
-      <Image source={{ uri: game.thumbnail }} style={styles.banner} />
-      <View style={styles.content}>
+    <View style={[styles.page, { backgroundColor: colors.background }]}>
+      <Image source={{ uri: game.thumbnail }} style={StyleSheet.absoluteFillObject} contentFit="cover" blurRadius={42} cachePolicy="memory-disk" />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.overlay }]} />
+      <View style={styles.topBar}>
+        <View style={[styles.topBarInner, Platform.OS === "web" && { maxWidth: 1160, width: "100%" }]}>
+          <Pressable onPress={() => router.back()} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Go back">
+            <Ionicons name="arrow-back" size={20} color={colors.accentText} />
+            <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
+          </Pressable>
+        </View>
+      </View>
+      <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailScrollContent}>
+      <View style={[styles.content, Platform.OS === "web" && { width: "100%", maxWidth: 1160, alignSelf: "center" }]}>
+        <View style={[styles.hero, { height: Platform.OS === "web" ? Math.min(420, Math.max(260, width * 0.26)) : 250 }]}>
+          <Image source={{ uri: game.thumbnail }} style={styles.heroBlur} contentFit="cover" blurRadius={28} cachePolicy="memory-disk" />
+          <View style={[styles.heroShade, { backgroundColor: colors.overlay }]} />
+          <Image source={{ uri: game.thumbnail }} style={styles.banner} contentFit="contain" cachePolicy="memory-disk" />
+        </View>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>{game.title}</Text>
             <Text style={styles.meta}>{game.genre}</Text>
           </View>
           <Pressable style={styles.shareButton} onPress={handleShare}>
-            <Ionicons name="share-social" size={20} color="#f5c518" />
+            <Ionicons name="share-social" size={20} color={themeColors.accentText} />
           </Pressable>
         </View>
 
@@ -229,13 +262,13 @@ export default function Details() {
           <TextInput 
             style={styles.reviewInput} 
             placeholder="Write a review..." 
-            placeholderTextColor="#666" 
+            placeholderTextColor={themeColors.muted}
             value={userReview} 
             onChangeText={setUserReview} 
             multiline 
           />
           <Pressable style={styles.sendBtn} onPress={submitReview}>
-            <Ionicons name="send" size={18} color="#000" />
+            <Ionicons name="send" size={18} color={themeColors.onAccent} />
           </Pressable>
         </View>
 
@@ -255,14 +288,25 @@ export default function Details() {
         ))}
         <View style={{ height: 50 }} />
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#121212" },
-  banner: { width: "100%", height: 250 },
-  content: { padding: 20 },
+const styles = createThemedStyles({
+  page: { flex: 1, width: "100%", backgroundColor: "#121212" },
+  topBar: { width: "100%", backgroundColor: "#121212", borderBottomWidth: 1, borderBottomColor: "#292929", zIndex: 2 },
+  topBarInner: { minHeight: 58, width: "100%", alignSelf: "center", justifyContent: "center", paddingHorizontal: 20 },
+  backButton: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 9, minHeight: 42, paddingHorizontal: 12, borderRadius: 13, backgroundColor: "#1e1e1e" },
+  blockedBackButton: { position: "absolute", top: 20, left: 20 },
+  backText: { fontSize: 14, fontWeight: "700" },
+  detailScroll: { flex: 1, width: "100%", backgroundColor: "transparent" },
+  detailScrollContent: { width: "100%", paddingBottom: 20 },
+  content: { width: "100%", paddingHorizontal: 20, paddingBottom: 20, backgroundColor: "#121212" },
+  hero: { position: "relative", width: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden", borderRadius: 18, backgroundColor: "#1e1e1e", marginTop: 14 },
+  heroBlur: { position: "absolute", top: -30, left: -30, right: -30, bottom: -30, opacity: 0.72 },
+  heroShade: { ...StyleSheet.absoluteFillObject },
+  banner: { width: "100%", height: "100%" },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   title: { color: "#fff", fontSize: 24, fontWeight: "bold" },
   meta: { color: "#f5c518", fontSize: 13, marginTop: 4 },

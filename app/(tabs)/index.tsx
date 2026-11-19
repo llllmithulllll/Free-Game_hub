@@ -1,9 +1,14 @@
 import { auth, db } from "@/lib/firebase";
+import { createThemedStyles, themeColors, useAppTheme, useThemedAlert } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
+import GamePalLoader from "@/components/GamePalLoader";
+import GamingBackdrop from "@/components/GamingBackdrop";
+import { Image } from "expo-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Head from "expo-router/head";
 import { useRouter } from "expo-router";
 import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
+import { removePlatformSuffix } from "@/lib/game-catalog";
 import { randomizeGames, type DiscoveryState, updateDiscoverySignals } from "@/lib/recommendations";
 import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 
@@ -28,10 +33,7 @@ import React, {
 } from "react";
 
 import {
-  ActivityIndicator,
-  Alert,
   FlatList,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -39,6 +41,8 @@ import {
   Text,
   TextInput,
   View,
+  Platform,
+  useWindowDimensions,
 } from "react-native";
 
 // ============================================================
@@ -81,11 +85,42 @@ const PLATFORMS = [
   "Nintendo Switch",
 ];
 
+const STOREFRONT_GENRES = ["Action", "Adventure", "Racing", "RPG", "Shooter", "Strategy", "Simulation", "Sports", "Puzzle", "Fighting"];
+
+function getGameGenres(game: any): string[] {
+  const values = Array.isArray(game.genres) && game.genres.length > 0
+    ? game.genres
+    : typeof game.genre === "string"
+      ? game.genre.split(/[,/&]/)
+      : [];
+  return values
+    .map((value: any) => typeof value === "string" ? value : value?.name)
+    .filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value: string) => value.trim());
+}
+
+function getNameList(value: any): string[] {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return values
+    .map((item: any) => typeof item === "string" ? item : item?.name)
+    .filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item: string) => item.trim());
+}
+
 // ============================================================
 // HOME
 // ============================================================
 
 export default function Home() {
+  const { colors } = useAppTheme();
+  const showAlert = useThemedAlert();
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const isWeb = Platform.OS === "web";
+  const desktopSidebar = isWeb && viewportWidth >= 1280;
+  const columns = viewportWidth >= 1500 ? 5 : viewportWidth >= 1180 ? 4 : viewportWidth >= 840 ? 3 : 2;
+  const listWidth = (isWeb ? Math.min(viewportWidth - 20, 1480) : viewportWidth - 20) - (desktopSidebar ? 330 : 0);
+  const sidePadding = desktopSidebar ? 0 : isWeb ? (viewportWidth >= 768 ? 28 : 16) : 4;
+  const cardWidth = Math.max(120, (listWidth - sidePadding * 2 - (columns - 1) * 12) / columns);
   // ==========================================================
   // STATE
   // ==========================================================
@@ -100,6 +135,7 @@ export default function Home() {
   const [filteredGames, setFilteredGames] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const [page, setPage] = useState(1);
@@ -180,14 +216,29 @@ export default function Home() {
   // ==========================================================
 
   const initializeData = async () => {
-    let categories: string[] = [];
-    let filter = true;
+    // Render the last catalog immediately. Network reads must not hold up
+    // showing cached games on a slower mobile connection.
     try {
-      const savedDiscovery = await AsyncStorage.getItem(DISCOVERY_KEY);
+      const [savedDiscovery, cached] = await Promise.all([
+        AsyncStorage.getItem(DISCOVERY_KEY),
+        AsyncStorage.getItem(CACHE_KEY),
+      ]);
       if (savedDiscovery) discoveryState.current = JSON.parse(savedDiscovery);
+
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        const randomized = randomizeGames(parsed, preferredCategoriesRef.current, discoveryState.current);
+        allGamesRef.current = randomized;
+        setAllGames(randomized);
+        setFilteredGames(filterSexualContentRef.current ? randomized.filter((game: any) => !isSexualContentGame(game)) : randomized);
+      }
     } catch (error) {
-      console.error("Discovery state load error:", error);
+      console.error("Cache Error:", error);
+      void AsyncStorage.removeItem(CACHE_KEY);
     }
+
+    // Start the catalog request before waiting on profile/preferences reads.
+    void fetchGames(1, true);
 
     const user = auth.currentUser;
     if (user) {
@@ -198,32 +249,21 @@ export default function Home() {
         ]);
         const profile = profileSnap.exists() ? profileSnap.data() : {};
         const preferences = preferencesSnap.exists() ? preferencesSnap.data() : {};
-        categories = preferences.categories || [];
-        filter = shouldFilterSexualContent(profile.dateOfBirth, preferences.sexualContentFilter);
+        const categories = preferences.categories || [];
+        const filter = shouldFilterSexualContent(profile.dateOfBirth, preferences.sexualContentFilter);
+        preferredCategoriesRef.current = categories;
+        filterSexualContentRef.current = filter;
+        const games = allGamesRef.current;
+        if (games.length) {
+          const personalized = randomizeGames(games, categories, discoveryState.current);
+          allGamesRef.current = personalized;
+          setAllGames(personalized);
+          setFilteredGames(filter ? personalized.filter((game: any) => !isSexualContentGame(game)) : personalized);
+        }
       } catch (error) {
         console.error("Content preference load error; using safe filter defaults:", error);
       }
     }
-    preferredCategoriesRef.current = categories;
-    filterSexualContentRef.current = filter;
-
-    try {
-      const cached = await AsyncStorage.getItem(CACHE_KEY);
-
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const randomized = randomizeGames(parsed, categories, discoveryState.current);
-        allGamesRef.current = randomized;
-        setAllGames(randomized);
-        setFilteredGames(filter ? randomized.filter((game: any) => !isSexualContentGame(game)) : randomized);
-      }
-    } catch (error) {
-      console.error("Cache Error:", error);
-
-      await AsyncStorage.removeItem(CACHE_KEY);
-    }
-
-    fetchGames(1, true);
   };
 
   // ==========================================================
@@ -365,17 +405,9 @@ export default function Home() {
     return games.filter(
       (game) => {
         if (filterSexualContentRef.current && isSexualContentGame(game)) return false;
-        const gameGenres =
-          game.genres ||
-          (game.genre
-            ? [game.genre]
-            : []);
-
-        const gameTags =
-          game.tags || [];
-
-        const gamePlatforms =
-          game.platforms || [];
+        const gameGenres = getGameGenres(game).map((name) => name.toLowerCase());
+        const gameTags = getNameList(game.tags).map((name) => name.toLowerCase());
+        const gamePlatforms = getNameList(game.platforms).map((name) => name.toLowerCase());
 
         // Selected genres use AND matching.
         //
@@ -386,9 +418,7 @@ export default function Home() {
           genres.length === 0 ||
           genres.every(
             (genre) =>
-              gameGenres.includes(
-                genre
-              )
+              gameGenres.includes(genre.trim().toLowerCase())
           );
 
         // Multiplayer + Co-op means
@@ -398,9 +428,7 @@ export default function Home() {
           tags.length === 0 ||
           tags.every(
             (tag) =>
-              gameTags.includes(
-                tag
-              )
+              gameTags.includes(tag.trim().toLowerCase())
           );
 
         // PC + PlayStation means
@@ -410,9 +438,7 @@ export default function Home() {
           platforms.length === 0 ||
           platforms.every(
             (platform) =>
-              gamePlatforms.includes(
-                platform
-              )
+              gamePlatforms.includes(platform.trim().toLowerCase())
           );
 
         return (
@@ -433,12 +459,14 @@ export default function Home() {
     initial = false
   ) => {
     setLoading(true);
+    if (initial) setCatalogError(null);
 
     try {
       const apiKey =
         process.env.EXPO_PUBLIC_RAWG_API_KEY;
 
       if (!apiKey) {
+        if (initial) setCatalogError("Game catalog needs EXPO_PUBLIC_RAWG_API_KEY in your local .env file.");
         console.error(
           "RAWG API key missing"
         );
@@ -446,19 +474,38 @@ export default function Home() {
         return;
       }
 
-      const response =
-        await fetch(
-          `https://api.rawg.io/api/games?key=${apiKey}&page=${pageNum}&page_size=40&ordering=-rating`
-        );
+      let response: Response | null = null;
+      let lastRequestError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        try {
+          response = await fetch(
+            `https://api.rawg.io/api/games?key=${apiKey}&page=${pageNum}&page_size=24&ordering=-rating`,
+            { signal: controller.signal }
+          );
+        } catch (error) {
+          lastRequestError = error;
+          if (attempt === 2) throw error;
+        } finally {
+          clearTimeout(timeout);
+        }
 
-      if (!response.ok) {
-        throw new Error(
-          `RAWG error: ${response.status}`
-        );
+        if (response?.ok) break;
+        if (response && response.status < 500) {
+          throw new Error(`RAWG error: ${response.status}`);
+        }
+        if (attempt === 2) {
+          throw new Error(response ? `RAWG error: ${response.status} after 3 attempts.` : "RAWG request failed after 3 attempts.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
       }
+
+      if (!response?.ok) throw lastRequestError instanceof Error ? lastRequestError : new Error("RAWG request failed.");
 
       const data =
         await response.json();
+      if (initial) setCatalogError(null);
 
       const formatted =
         (
@@ -543,10 +590,9 @@ export default function Home() {
         formatted
       );
     } catch (error) {
-      console.error(
-        "Fetch Error:",
-        error
-      );
+      if (initial) setCatalogError("Could not load the game catalog. Check your connection and RAWG API settings.");
+      // Keep cached games and the inline catalog message; avoid a second
+      // native LogBox error while another screen is in use.
     } finally {
       setLoading(false);
     }
@@ -666,8 +712,9 @@ export default function Home() {
     setLoading(true);
 
     try {
+      const catalogSearchText = removePlatformSuffix(searchText).trim();
       const normalized =
-        searchText
+        catalogSearchText
           .trim()
           .toLowerCase();
 
@@ -731,7 +778,7 @@ export default function Home() {
           const response =
             await fetch(
               `https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(
-                searchText
+                catalogSearchText
               )}&page_size=40`
             );
 
@@ -1070,7 +1117,7 @@ export default function Home() {
       if (
         !auth.currentUser
       ) {
-        return Alert.alert(
+        return showAlert(
           "Login Required",
           "Log in to track games."
         );
@@ -1104,7 +1151,7 @@ export default function Home() {
           }
         );
 
-        Alert.alert(
+        showAlert(
           "Success",
           `${game.title} marked as ${status}.`
         );
@@ -1128,7 +1175,8 @@ export default function Home() {
     index?: number;
   }) => (
     <Animated.View
-      style={styles.gameCard}
+      {...(isWeb ? { className: "gh-game-card" } as any : {})}
+      style={[styles.gameCard, { width: cardWidth, minWidth: cardWidth, maxWidth: cardWidth, flexBasis: cardWidth, flexGrow: 0, flexShrink: 0 }]}
       entering={FadeInUp.delay(Math.min(index, 6) * 18).duration(210).reduceMotion(ReduceMotion.System)}
     >
       <Pressable
@@ -1150,9 +1198,9 @@ export default function Home() {
             uri:
               item.thumbnail,
           }}
-          style={
-            styles.thumbnail
-          }
+          style={[styles.thumbnail, { height: Math.round(cardWidth * 0.58) }]}
+          contentFit="cover"
+          cachePolicy="memory-disk"
         />
       </Pressable>
 
@@ -1162,9 +1210,7 @@ export default function Home() {
         }
       >
         <Text
-          style={
-            styles.gameTitle
-          }
+          style={[styles.gameTitle, isWeb && viewportWidth >= 768 && { fontSize: 14 }]}
           numberOfLines={
             1
           }
@@ -1207,7 +1253,7 @@ export default function Home() {
               <Ionicons
                 name="game-controller-outline"
                 size={16}
-                color="#f5c518"
+                color={themeColors.accentText}
               />
             </Pressable>
 
@@ -1222,7 +1268,7 @@ export default function Home() {
               <Ionicons
                 name="checkmark-done"
                 size={16}
-                color="#4CAF50"
+                color={themeColors.success}
               />
             </Pressable>
           </View>
@@ -1277,7 +1323,7 @@ export default function Home() {
           <Ionicons
             name="checkmark"
             size={14}
-            color="#000"
+            color={themeColors.onAccent}
           />
         )}
 
@@ -1304,6 +1350,48 @@ export default function Home() {
     selectedTags.length +
     selectedPlatforms.length;
 
+  const isStorefront = isWeb && !search.trim() && activeFilterCount === 0;
+  const storefrontGames = filteredGames.length > 1 ? filteredGames.slice(1) : filteredGames;
+  const extraGenres = [...new Set(storefrontGames.flatMap(getGameGenres))].filter((genre) =>
+    !STOREFRONT_GENRES.some((knownGenre) => knownGenre.toLowerCase() === genre.toLowerCase()) &&
+    storefrontGames.filter((game) => getGameGenres(game).some((name) => name.toLowerCase() === genre.toLowerCase())).length > 1
+  );
+  const storeSections = [...STOREFRONT_GENRES, ...extraGenres].map((genre) => ({
+    genre,
+    games: storefrontGames.filter((game) => getGameGenres(game).some((name) =>
+      name.toLowerCase() === genre.toLowerCase() || name.toLowerCase().includes(genre.toLowerCase())
+    )),
+  })).filter((section) => section.games.length > 0);
+  const categorizedGameIds = new Set(storeSections.flatMap((section) => section.games.map((game) => String(game.id))));
+  const uncategorizedGames = storefrontGames.filter((game) => !categorizedGameIds.has(String(game.id)));
+  if (uncategorizedGames.length > 0) storeSections.push({ genre: "More to explore", games: uncategorizedGames });
+
+  const showAllByGenre = (genre: string) => {
+    setSearch("");
+    setSearchResults([]);
+    setSelectedGenres([genre]);
+    setSelectedTags([]);
+    setSelectedPlatforms([]);
+    setFilteredGames(filterGames(allGames, [genre], [], []));
+  };
+
+  const renderFeaturedHero = () => (
+    <Pressable
+      {...(isWeb ? { className: "gh-featured-hero" } as any : {})}
+      onPress={() => router.push({ pathname: "/details", params: { id: filteredGames[0].id } })}
+      style={[styles.featuredHero, { height: Math.min(390, Math.max(250, viewportWidth * 0.23)) }]}
+    >
+      <Image source={{ uri: filteredGames[0].thumbnail }} style={StyleSheet.absoluteFillObject} contentFit="cover" cachePolicy="memory-disk" />
+      <View style={[StyleSheet.absoluteFillObject, styles.featuredShade, { backgroundColor: "rgba(0,0,0,0.58)" }]} />
+      <View style={styles.featuredCopy}>
+        <Text style={[styles.featuredEyebrow, { color: "#f5c518" }]}>FEATURED GAME</Text>
+        <Text style={[styles.featuredTitle, { color: "#fff" }]} numberOfLines={2}>{filteredGames[0].title}</Text>
+        <Text style={[styles.featuredGenre, { color: "#eee" }]} numberOfLines={1}>{filteredGames[0].genre} · Picked for your discovery feed</Text>
+        <View style={styles.featuredCta}><Text style={styles.featuredCtaText}>Explore game</Text><Ionicons name="arrow-forward" size={16} color="#111" /></View>
+      </View>
+    </Pressable>
+  );
+
   // ==========================================================
   // UI
   // ==========================================================
@@ -1311,24 +1399,34 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Free-Game Hub | Discover games</title>
+        <title>GamePal | Discover games</title>
         <meta
           name="description"
           content="Discover games, find free giveaways, and keep your game library organized."
         />
       </Head>
       <View
+        {...(isWeb ? { className: "gh-page-enter" } as any : {})}
         style={
           styles.container
         }
       >
+      <GamingBackdrop />
       {/* SEARCH */}
 
-      <View
-        style={
-          styles.searchHeader
-        }
-      >
+        <View style={[styles.searchHeader, isWeb && { width: "100%", maxWidth: 1480, alignSelf: "center", marginTop: viewportWidth >= 768 ? 28 : 20, paddingHorizontal: viewportWidth >= 768 ? 28 : 16 }]}>
+          <View style={styles.homeBrandHeader}>
+            <Image
+              source={require("@/assets/gamepal/logo-pack/png/gamepal-logo-color-transparent-1024.png")}
+              contentFit="contain"
+              accessibilityLabel="GamePal logo"
+              style={styles.homeBrandLogo}
+            />
+            <View style={styles.homeBrandCopy}>
+              <Text style={[styles.homeBrandTitle, { color: colors.text, fontSize: isWeb && viewportWidth >= 768 ? 29 : 21 }]}>Discover games</Text>
+              <Text style={[styles.homeBrandSubtitle, { color: colors.textSecondary }]}>Find your next favorite game.</Text>
+            </View>
+          </View>
         <View
           style={
             styles.searchRow
@@ -1342,7 +1440,7 @@ export default function Home() {
             <Ionicons
               name="search"
               size={20}
-              color="#888"
+              color={themeColors.muted}
             />
 
             <TextInput
@@ -1350,7 +1448,7 @@ export default function Home() {
                 styles.searchInput
               }
               placeholder="Search games..."
-              placeholderTextColor="#888"
+              placeholderTextColor={themeColors.muted}
               value={
                 search
               }
@@ -1363,23 +1461,23 @@ export default function Home() {
             />
           </View>
 
+          {isWeb && (
+            <Pressable {...(isWeb ? { className: "gh-motion-button" } as any : {})} style={styles.filterButton} onPress={() => void handleRefresh()} accessibilityRole="button" accessibilityLabel="Refresh game recommendations">
+              <Ionicons name="refresh-outline" size={21} color={themeColors.accentText} />
+            </Pressable>
+          )}
+
           {/* FILTER BUTTON */}
 
-          <Pressable
-            style={
-              styles.filterButton
-            }
-
-            onPress={() =>
-              setFilterVisible(
-                true
-              )
-            }
+          {!desktopSidebar && <Pressable
+            {...(isWeb ? { className: "gh-motion-button" } as any : {})}
+            style={styles.filterButton}
+            onPress={() => setFilterVisible(true)}
           >
             <Ionicons
               name="options-outline"
               size={22}
-              color="#f5c518"
+              color={themeColors.accentText}
             />
 
             {activeFilterCount >
@@ -1400,16 +1498,85 @@ export default function Home() {
                 </Text>
               </View>
             )}
-          </Pressable>
+          </Pressable>}
         </View>
       </View>
 
       {/* GAME LIST */}
 
+      <View style={[styles.browseLayout, desktopSidebar && { flexDirection: "row", gap: 24, maxWidth: 1480, alignSelf: "center", paddingHorizontal: 28 }]}>
+      {desktopSidebar && (
+        <View style={[styles.filterSidebar, { height: Math.max(320, viewportHeight - 280) }]}>
+          <View style={styles.sidebarHeading}>
+            <View>
+              <Text style={styles.sidebarTitle}>Filters</Text>
+              <Text style={styles.modalSubtitle}>Narrow your discovery</Text>
+            </View>
+            {activeFilterCount > 0 && <View style={styles.filterBadge}><Text style={styles.filterBadgeText}>{activeFilterCount}</Text></View>}
+          </View>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <Text style={styles.sectionTitle}>Genres</Text>
+            <View style={styles.chipContainer}>{GENRES.map((genre) => renderChip(genre, selectedGenres, setSelectedGenres))}</View>
+            <Text style={styles.sectionTitle}>Tags</Text>
+            <View style={styles.chipContainer}>{TAGS.map((tag) => renderChip(tag, selectedTags, setSelectedTags))}</View>
+            <Text style={styles.sectionTitle}>Platforms</Text>
+            <View style={styles.chipContainer}>{PLATFORMS.map((platform) => renderChip(platform, selectedPlatforms, setSelectedPlatforms))}</View>
+          </ScrollView>
+          <View style={styles.sidebarActions}>
+            <Pressable style={styles.clearButton} onPress={clearFilters}><Text style={styles.clearButtonText}>Clear</Text></Pressable>
+            <Pressable style={styles.applyButton} onPress={handleApplyFilters}><Text style={styles.applyButtonText}>Apply</Text></Pressable>
+          </View>
+        </View>
+      )}
+
+      {isStorefront ? (
+        <ScrollView
+          style={desktopSidebar ? { flex: 1, minWidth: 0 } : isWeb ? { width: "100%", maxWidth: 1480, alignSelf: "center" } : undefined}
+          contentContainerStyle={{ paddingHorizontal: sidePadding, paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {filteredGames.length > 0 && renderFeaturedHero()}
+          {filteredGames.length === 0 && (
+            <View style={styles.emptyContainer}>
+              {loading ? <GamePalLoader size={100} label="Loading games" fullScreen={false} /> : <Text style={styles.emptyText}>{catalogError || "No games are available right now."}</Text>}
+            </View>
+          )}
+          {storeSections.map((section) => (
+            <View key={section.genre} style={styles.storeSection}>
+              <View style={styles.storeSectionHeader}>
+                <View>
+                  <Text style={styles.storeSectionTitle}>{section.genre} games</Text>
+                  <Text style={styles.storeSectionSubtitle}>Explore picks from this genre</Text>
+                </View>
+                {section.genre !== "More to explore" && (
+                  <Pressable {...(isWeb ? { className: "gh-motion-button" } as any : {})} onPress={() => showAllByGenre(section.genre)} style={styles.viewAllButton} accessibilityRole="button" accessibilityLabel={`View all ${section.genre} games`}>
+                    <Text style={styles.viewAllText}>View all</Text>
+                    <Ionicons name="arrow-forward" size={15} color={themeColors.accentText} />
+                  </Pressable>
+                )}
+              </View>
+              <ScrollView
+                horizontal
+                nestedScrollEnabled
+                style={styles.carousel}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
+              >
+                {section.games.map((game, index) => (
+                  <View key={`${section.genre}-${game.id}`} style={{ width: cardWidth, minWidth: cardWidth, flexGrow: 0, flexShrink: 0 }}>
+                    {renderGameItem({ item: game, index })}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          ))}
+        </ScrollView>
+      ) : (
       <FlatList
-        data={
-          filteredGames
-        }
+        key={`games-grid-${columns}`}
+        data={filteredGames}
+        style={desktopSidebar ? { flex: 1, minWidth: 0 } : isWeb ? { width: "100%", maxWidth: 1480, alignSelf: "center" } : undefined}
+        contentContainerStyle={{ paddingHorizontal: sidePadding, paddingBottom: 100 }}
 
         refreshing={refreshing}
         onRefresh={handleRefresh}
@@ -1424,13 +1591,13 @@ export default function Home() {
           renderGameItem
         }
 
-        numColumns={
-          2
-        }
+        initialNumToRender={8}
+        windowSize={5}
+        maxToRenderPerBatch={8}
 
-        columnWrapperStyle={
-          styles.row
-        }
+        numColumns={columns}
+
+        columnWrapperStyle={[styles.row, { justifyContent: "flex-start", gap: 12, paddingHorizontal: 0 }]}
 
         onEndReached={
           handleLoadMore
@@ -1452,7 +1619,7 @@ export default function Home() {
               <Ionicons
                 name="game-controller-outline"
                 size={40}
-                color="#555"
+              color={themeColors.muted}
               />
 
               <Text
@@ -1468,15 +1635,12 @@ export default function Home() {
 
         ListFooterComponent={
           loading ? (
-            <ActivityIndicator
-              color="#f5c518"
-              style={{
-                margin: 20,
-              }}
-            />
+            <GamePalLoader size={92} label="Loading more games" fullScreen={false} />
           ) : null
         }
       />
+      )}
+      </View>
 
       {/* ===================================================== */}
       {/* FILTER MODAL */}
@@ -1544,7 +1708,7 @@ export default function Home() {
                 <Ionicons
                   name="close"
                   size={26}
-                  color="#fff"
+                  color={themeColors.text}
                 />
               </Pressable>
             </View>
@@ -1688,7 +1852,7 @@ export default function Home() {
 // ============================================================
 
 const styles =
-  StyleSheet.create({
+  createThemedStyles({
     container: {
       flex: 1,
       backgroundColor:
@@ -1697,10 +1861,48 @@ const styles =
     },
 
     searchHeader: {
-      marginTop: 60,
+      marginTop: 28,
       marginBottom: 15,
       paddingHorizontal: 10,
     },
+    homeBrandHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 },
+    homeBrandLogo: { width: 82, height: 82 },
+    homeBrandCopy: { flex: 1 },
+    homeBrandTitle: { fontSize: 21, fontWeight: "900", letterSpacing: -0.3 },
+    homeBrandSubtitle: { fontSize: 13, marginTop: 4 },
+    browseLayout: { flex: 1, width: "100%" },
+    filterSidebar: { width: 250, flexShrink: 0, backgroundColor: "#1e1e1e", borderWidth: 1, borderColor: "#333", borderRadius: 18, padding: 16, marginBottom: 24 },
+    sidebarHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+    sidebarTitle: { color: "#fff", fontSize: 18, fontWeight: "800" },
+    sidebarActions: { flexDirection: "row", gap: 8, paddingTop: 14 },
+    storeIntro: { marginBottom: 20 },
+    storeTitle: { color: "#fff", fontSize: 30, fontWeight: "900" },
+    storeSubtitle: { color: "#aaa", fontSize: 14, marginTop: 5 },
+    storeSection: { marginBottom: 28 },
+    carousel: { width: "100%", flexGrow: 0 },
+    storeSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12, gap: 12 },
+    storeSectionTitle: { color: "#fff", fontSize: 21, fontWeight: "800" },
+    storeSectionSubtitle: { color: "#999", fontSize: 12, marginTop: 4 },
+    viewAllButton: { minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: "#444" },
+    viewAllText: { color: "#f5c518", fontSize: 12, fontWeight: "800" },
+
+    featuredHero: {
+      position: "relative",
+      overflow: "hidden",
+      borderRadius: 22,
+      marginBottom: 24,
+      backgroundColor: "#1e1e1e",
+      borderWidth: 1,
+      borderColor: "#333",
+    },
+
+    featuredShade: { backgroundColor: "rgba(0,0,0,0.58)" },
+    featuredCopy: { flex: 1, justifyContent: "flex-end", alignItems: "flex-start", padding: 30 },
+    featuredEyebrow: { color: "#f5c518", fontSize: 12, fontWeight: "800", letterSpacing: 1.4, marginBottom: 8 },
+    featuredTitle: { color: "#fff", fontSize: 34, lineHeight: 40, fontWeight: "900", maxWidth: 620 },
+    featuredGenre: { color: "#eee", fontSize: 14, marginTop: 9, marginBottom: 18 },
+    featuredCta: { flexDirection: "row", alignItems: "center", gap: 9, backgroundColor: "#f5c518", borderRadius: 10, paddingVertical: 12, paddingHorizontal: 17 },
+    featuredCtaText: { color: "#111", fontSize: 13, fontWeight: "800" },
 
     searchRow: {
       flexDirection: "row",
@@ -1780,6 +1982,10 @@ const styles =
         "#2a2a2a",
       overflow:
         "hidden",
+    },
+
+    gameCardImagePressed: {
+      opacity: 0.82,
     },
 
     thumbnail: {

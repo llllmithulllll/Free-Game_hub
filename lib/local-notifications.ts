@@ -5,7 +5,8 @@ import { Platform } from "react-native";
 export type LocalNotificationSettings = {
   friendRequests: boolean;
   giveawayAlerts: boolean;
-  giveawayPlatform: string;
+  giveawayPlatforms: string[];
+  giveawayTypes: string[];
 };
 
 const SETTINGS_KEY = "@gamehub_notification_settings_v1";
@@ -13,24 +14,34 @@ const SETTINGS_KEY = "@gamehub_notification_settings_v1";
 export const DEFAULT_NOTIFICATION_SETTINGS: LocalNotificationSettings = {
   friendRequests: false,
   giveawayAlerts: false,
-  giveawayPlatform: "all",
+  giveawayPlatforms: ["all"],
+  giveawayTypes: ["all"],
 };
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+if (Platform.OS !== "web") {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 export async function loadNotificationSettings(): Promise<LocalNotificationSettings> {
   try {
     const saved = await AsyncStorage.getItem(SETTINGS_KEY);
-    return saved
-      ? { ...DEFAULT_NOTIFICATION_SETTINGS, ...JSON.parse(saved) }
-      : DEFAULT_NOTIFICATION_SETTINGS;
+    if (!saved) return DEFAULT_NOTIFICATION_SETTINGS;
+    const parsed = JSON.parse(saved);
+    // Migrate the previous single-platform setting to the new multi-select format.
+    const giveawayPlatforms = Array.isArray(parsed.giveawayPlatforms)
+      ? parsed.giveawayPlatforms.filter((value: unknown) => typeof value === "string")
+      : typeof parsed.giveawayPlatform === "string" ? [parsed.giveawayPlatform] : ["all"];
+    const giveawayTypes = Array.isArray(parsed.giveawayTypes)
+      ? parsed.giveawayTypes.filter((value: unknown) => typeof value === "string")
+      : ["all"];
+    return { ...DEFAULT_NOTIFICATION_SETTINGS, ...parsed, giveawayPlatforms, giveawayTypes };
   } catch {
     return DEFAULT_NOTIFICATION_SETTINGS;
   }
