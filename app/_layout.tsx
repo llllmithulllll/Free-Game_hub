@@ -97,8 +97,18 @@ function RootNavigator() {
         return;
       }
 
-      // If user exists, check for preferences
+      // Google accounts may be created without an in-app username or date of
+      // birth. Collect those before preferences so every account has the data
+      // used by friend search and age-aware content filtering.
       try {
+        const profileSnap = await getDoc(doc(db, "users", user.uid));
+        const profile = profileSnap.exists() ? profileSnap.data() : {};
+        if ((!profile.username || !profile.dateOfBirth) && root !== "edit-profile") {
+          router.replace({ pathname: "/edit-profile", params: { completeProfile: "1" } });
+          lastCheckedUid.current = user.uid;
+          return;
+        }
+
         const prefRef = doc(db, "users", user.uid, "preferences", "data");
         let prefSnap;
         try {

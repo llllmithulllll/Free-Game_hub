@@ -5,6 +5,9 @@ import { useRouter } from "expo-router";
 import { createUserWithEmailAndPassword, sendEmailVerification, signOut, updateProfile } from "firebase/auth";
 import { doc, serverTimestamp, setDoc, Timestamp } from "firebase/firestore";
 import { ageFromDateOfBirth } from "@/lib/content-filter";
+import { getPasswordRequirements, isPasswordAcceptable } from "@/lib/password-policy";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
+import { getSignedInDestination } from "@/lib/auth-routing";
 import React, { useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
@@ -30,6 +33,20 @@ export default function Signup() {
   });
 
   const router = useRouter();
+  const passwordRequirements = getPasswordRequirements(password);
+
+  const finishGoogleSignIn = async () => {
+    const user = auth.currentUser;
+    if (!user) throw new Error("Google sign-in completed without an authenticated user.");
+    try {
+      const destination = await getSignedInDestination(user);
+      if (destination === "complete-profile") router.replace({ pathname: "/edit-profile", params: { completeProfile: "1" } });
+      else router.replace(destination);
+    } catch (error) {
+      router.replace("/(tabs)");
+      console.warn("Could not resolve Google sign-in destination:", error);
+    }
+  };
 
   const showAlert = (title: string, message: string, type: 'error' | 'success') => {
     setAlertConfig({
@@ -59,6 +76,10 @@ export default function Signup() {
     }
     if (password !== confirmPassword) {
       showAlert("Passwords Mismatch", "The passwords you entered do not match.", "error");
+      return;
+    }
+    if (!isPasswordAcceptable(password)) {
+      showAlert("Choose a stronger password", "Use at least 8 characters, including at least one letter and one number.", "error");
       return;
     }
 
@@ -154,6 +175,14 @@ export default function Signup() {
           <Ionicons name={showPassword ? "eye-off" : "eye"} size={20} color={themeColors.muted} />
         </Pressable>
       </View>
+      <View style={styles.passwordRequirements}>
+        {passwordRequirements.map(({ label, met }) => (
+          <View key={label} style={styles.requirementRow}>
+            <Ionicons name={met ? "checkmark-circle" : "ellipse-outline"} size={15} color={met ? "#2eae68" : themeColors.muted} />
+            <Text style={[styles.requirementText, met && styles.requirementMet]}>{label}</Text>
+          </View>
+        ))}
+      </View>
 
       <View style={styles.passwordContainer}>
         <TextInput placeholder="Confirm Password" value={confirmPassword} onChangeText={setConfirmPassword} style={styles.passwordInput} secureTextEntry={!showPassword} placeholderTextColor={themeColors.muted} />
@@ -165,6 +194,9 @@ export default function Signup() {
       <Pressable style={styles.button} onPress={handleSignup} disabled={loading}>
         {loading ? <ActivityIndicator color={themeColors.onAccent} /> : <Text style={styles.buttonText}>Sign Up</Text>}
       </Pressable>
+
+      <View style={styles.divider}><View style={styles.dividerLine} /><Text style={styles.dividerText}>or</Text><View style={styles.dividerLine} /></View>
+      <GoogleSignInButton disabled={loading} onSuccess={finishGoogleSignIn} onError={(message) => showAlert("Google sign-in unavailable", message, "error")} />
 
       <Pressable onPress={() => router.push("/login")}>
         <Text style={styles.linkText}>Already have an account? <Text style={styles.linkTextBold}>Login</Text></Text>
@@ -188,9 +220,16 @@ const styles = createThemedStyles({
   ageHint: { color: "#777", fontSize: 11, lineHeight: 16, marginTop: -8, marginBottom: 10, marginHorizontal: 4 },
   passwordContainer: { width: "100%", height: 48, flexDirection: 'row', alignItems: 'center', backgroundColor: "#252525", borderRadius: 10, marginBottom: 10, borderWidth: 1, borderColor: "#333" },
   passwordInput: { flex: 1, color: "#fff", paddingHorizontal: 14, height: "100%" },
+  passwordRequirements: { marginTop: -4, marginBottom: 8, marginLeft: 4, gap: 4 },
+  requirementRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  requirementText: { color: "#999", fontSize: 12 },
+  requirementMet: { color: "#2eae68" },
   eyeIcon: { paddingHorizontal: 15 },
   button: { backgroundColor: "#f5c518", padding: 15, borderRadius: 10, marginTop: 10 },
   buttonText: { textAlign: "center", fontWeight: "bold", color: "#000", fontSize: 16 },
+  divider: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: "#444" },
+  dividerText: { color: "#aaa", fontSize: 13 },
   linkText: { color: "#f5c518", textAlign: "center", marginTop: 25, fontSize: 14 },
   linkTextBold: { fontWeight: "bold" },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },

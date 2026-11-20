@@ -7,7 +7,7 @@ import Animated, { ReduceMotion, SlideInRight } from "react-native-reanimated";
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { updateProfile } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc, Timestamp } from "firebase/firestore";
 import { useEffect, useState } from "react";
@@ -17,6 +17,7 @@ export default function EditProfile() {
   const { colors } = useAppTheme();
   const showAlert = useThemedAlert();
   const router = useRouter();
+  const { completeProfile } = useLocalSearchParams<{ completeProfile?: string }>();
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
@@ -148,9 +149,11 @@ export default function EditProfile() {
         await deleteProfileAvatar(previousAvatarStorageKey).catch((error) => console.warn("Old profile picture cleanup failed:", error));
         setPreviousAvatarStorageKey(avatarStorageKey);
       }
-      showAlert("Profile saved", "Your profile is updated. Contact links are shared with accepted friends only.", [
-        { text: "Done", onPress: () => router.back() },
-      ]);
+      showAlert(
+        completeProfile === "1" ? "Profile complete" : "Profile saved",
+        completeProfile === "1" ? "Your profile is ready. Next, choose the games and genres you like." : "Your profile is updated. Contact links are shared with accepted friends only.",
+        [{ text: "Done", onPress: () => completeProfile === "1" ? router.replace("/preferences") : router.back() }],
+      );
     } catch (error) {
       console.error("Edit profile save failed:", error);
       showAlert("Could not save", "Please check your connection and try again. If you just updated Firestore rules, make sure they have finished publishing.");
@@ -172,12 +175,14 @@ export default function EditProfile() {
       keyboardShouldPersistTaps="handled"
       entering={SlideInRight.duration(220).reduceMotion(ReduceMotion.System)}
     >
-      <Pressable onPress={() => router.back()} style={styles.back}>
-        <Ionicons name="arrow-back" size={22} color={themeColors.accentText} />
-        <Text style={styles.backText}>Profile</Text>
-      </Pressable>
-      <Text style={styles.title}>Edit profile</Text>
-      <Text style={styles.subtitle}>Manage your profile details and the contact links friends can see.</Text>
+      {completeProfile !== "1" && (
+        <Pressable onPress={() => router.back()} style={styles.back}>
+          <Ionicons name="arrow-back" size={22} color={themeColors.accentText} />
+          <Text style={styles.backText}>Profile</Text>
+        </Pressable>
+      )}
+      <Text style={styles.title}>{completeProfile === "1" ? "Complete your profile" : "Edit profile"}</Text>
+      <Text style={styles.subtitle}>{completeProfile === "1" ? "Add your name, username, and date of birth to finish setting up your account." : "Manage your profile details and the contact links friends can see."}</Text>
 
       <Text style={styles.section}>PROFILE</Text>
       <Text style={styles.label}>Profile picture · optional</Text>

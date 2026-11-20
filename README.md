@@ -14,6 +14,7 @@ For a categorized list of changes on this branch, see [CHANGELOG.md](CHANGELOG.m
 - Browse free game, DLC/loot, and other offers from GamerPower; claim offers to the personal library, open the giveaway, and share it.
 - Maintain a library of games marked Playing, To Play, Completed, or Claimed. Claimed DLC has its own library filter. Tapping a claimed offer searches RAWG by title and opens the catalog detail page.
 - Create an account with date of birth, choose onboarding preferences after login, and apply the age-aware sexual-content filter.
+- Sign in with email/password or Google. Email signup shows and enforces an 8-character minimum with at least one letter and one number. Google accounts complete the same username, date-of-birth, and game-preference onboarding.
 - Search players by username, send/accept friend requests, view accepted friends’ profiles and libraries, and open external Discord/Signal contact links.
 - Optionally upload a profile photo or animated GIF from the device/browser. Files are validated and uploaded through a Firebase-authenticated Cloudflare Worker to R2, then shown on profiles and friend/search lists. No external GIF search or Tenor API key is used.
 - Enable local notifications for friend requests and platform-filtered new giveaways. These checks currently run while the app is active.
@@ -85,9 +86,30 @@ EXPO_PUBLIC_FIREBASE_APP_ID=
 EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID=
 EXPO_PUBLIC_RAWG_API_KEY=
 EXPO_PUBLIC_AVATAR_API_URL=https://gamepal-gif-search.thakurmithlesh988.workers.dev
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=
+EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=
+EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=
 ```
 
 Use the Firebase web app configuration and a RAWG API key. Expo embeds `EXPO_PUBLIC_*` values into builds, so treat distributable APKs as containing those client configuration values. Do not put server credentials or private admin keys in this file.
+
+### Google sign-in setup
+
+1. In Firebase Console, open **Authentication → Sign-in method** and enable **Google**.
+2. In Google Cloud Console, use the OAuth credentials associated with the same Firebase project. Add a **Web application** OAuth client and put its client ID in `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
+3. Create an **Android** OAuth client for package `com.llllmithulllll.freegamehub`. Register the SHA-1 fingerprint of the signing key used to build the app, then put that client ID in `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`. For the current local debug build, Android Studio's debug key can be inspected with:
+
+   ```powershell
+   keytool -list -v -keystore android/app/debug.keystore -alias androiddebugkey -storepass android -keypass android
+   ```
+
+   For a release APK, register the release signing key's SHA-1 too. Never share or commit a keystore or its passwords.
+4. If you distribute an iOS app, create an **iOS** OAuth client for bundle ID `com.llllmithulllll.freegamehub` and set `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`.
+5. In Firebase Authentication's **Authorized domains**, add the domain that serves the web app.
+6. Put the client IDs in your private local `.env`. Client IDs are public app configuration; never put a client secret in the Expo app.
+7. Restart Expo after changing `.env`. Rebuild and reinstall the Android app to apply the native auth configuration; a Metro reload alone does not update an installed APK.
+
+Google sign-in uses Firebase Auth on web and the Expo browser ID-token flow on Android. Google accounts are asked for an in-app username and date of birth before game-preference setup when those fields do not already exist.
 
 ### Install dependencies and run
 

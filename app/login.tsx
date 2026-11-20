@@ -5,6 +5,8 @@ import { useRouter } from "expo-router";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import React, { useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
+import { getSignedInDestination } from "@/lib/auth-routing";
 
 export default function Login() {
   const { resolvedMode } = useAppTheme();
@@ -16,6 +18,20 @@ export default function Login() {
   const [alertMsg, setAlertMsg] = useState("");
 
   const router = useRouter();
+
+  const finishGoogleSignIn = async () => {
+    const user = auth.currentUser;
+    if (!user) throw new Error("Google sign-in completed without an authenticated user.");
+    try {
+      const destination = await getSignedInDestination(user);
+      if (destination === "complete-profile") router.replace({ pathname: "/edit-profile", params: { completeProfile: "1" } });
+      else router.replace(destination);
+    } catch (error) {
+      // If onboarding data cannot be read temporarily, let the root auth gate retry it.
+      router.replace("/(tabs)");
+      console.warn("Could not resolve Google sign-in destination:", error);
+    }
+  };
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -87,6 +103,9 @@ export default function Login() {
             {loading ? <ActivityIndicator color={themeColors.onAccent} /> : <Text style={styles.buttonText}>Login</Text>}
           </Pressable>
 
+          <View style={styles.divider}><View style={styles.dividerLine} /><Text style={styles.dividerText}>or</Text><View style={styles.dividerLine} /></View>
+          <GoogleSignInButton disabled={loading} onSuccess={finishGoogleSignIn} onError={(message) => { setAlertMsg(message); setAlertVisible(true); }} />
+
           <Pressable onPress={() => router.push("/signup")}>
             <Text style={styles.linkText}>New gamer here? <Text style={styles.linkTextBold}>Create Account</Text></Text>
           </Pressable>
@@ -110,6 +129,9 @@ const styles = createThemedStyles({
   eyeIcon: { paddingHorizontal: 15 },
   button: { backgroundColor: "#f5c518", padding: 15, borderRadius: 10, marginTop: 10 },
   buttonText: { textAlign: "center", fontWeight: "bold", color: "#000", fontSize: 16 },
+  divider: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: "#444" },
+  dividerText: { color: "#aaa", fontSize: 13 },
   linkText: { color: "#f5c518", textAlign: "center", marginTop: 25, fontSize: 14 },
   linkTextBold: { fontWeight: "bold" },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },

@@ -29,6 +29,7 @@ import {
 } from "react-native";
 
 import { auth, db } from "@/lib/firebase";
+import { requestJson } from "@/lib/http-json";
 import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
 import {
   collection,
@@ -94,9 +95,7 @@ async function fetchAlertGiveaways(selectedPlatform: string) {
   const url = selectedPlatform === "all"
     ? "https://www.gamerpower.com/api/giveaways"
     : `https://www.gamerpower.com/api/giveaways?platform=${encodeURIComponent(selectedPlatform)}`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`GamerPower returned ${response.status}`);
-  const data = await response.json();
+  const data = await requestJson<any>(url, 12000);
   return Array.isArray(data) ? data : Array.isArray(data?.giveaways) ? data.giveaways : [];
 }
 
@@ -287,8 +286,6 @@ export default function FreeNow() {
   }, []);
 
   async function fetchGiveaways(requestId = ++giveawayRequestId.current) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
     try {
       setErrorMsg(null);
 
@@ -302,16 +299,7 @@ export default function FreeNow() {
       if (type !== "all") params.push(`type=${type}`);
       if (params.length) url += "?" + params.join("&");
 
-      const res = await fetch(url, { signal: controller.signal });
-
-      if (!res.ok) {
-        // Surfacing the actual HTTP status — previously this was
-        // impossible to see in a release build since the catch block only
-        // did console.log, which isn't visible without a debugger attached.
-        throw new Error(`GamerPower API returned ${res.status}`);
-      }
-
-      const data = await res.json();
+      const data = await requestJson<any>(url, 12000);
 
       // Defensive: handle either a bare array (the documented real shape)
       // or a { giveaways: [...] } wrapper, in case that ever changes.
@@ -324,13 +312,9 @@ export default function FreeNow() {
       if (requestId === giveawayRequestId.current) setGiveaways(list);
       void AsyncStorage.setItem(`${GIVEAWAYS_CACHE_KEY}_${platform}_${type}`, JSON.stringify(list));
     } catch (e: any) {
-      const message = e?.name === "AbortError"
-        ? "Giveaways are taking too long to load. Check your connection and retry."
-        : e?.message || "Could not load giveaways. Check your connection.";
+      const message = e?.message || "Could not load giveaways. Check your connection.";
       console.error("Giveaways fetch error:", message);
       if (requestId === giveawayRequestId.current) setErrorMsg(message);
-    } finally {
-      clearTimeout(timeout);
     }
   }
 

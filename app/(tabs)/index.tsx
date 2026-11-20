@@ -10,6 +10,7 @@ import { useRouter } from "expo-router";
 import { isSexualContentGame, shouldFilterSexualContent } from "@/lib/content-filter";
 import { removePlatformSuffix } from "@/lib/game-catalog";
 import { randomizeGames, type DiscoveryState, updateDiscoverySignals } from "@/lib/recommendations";
+import { HttpJsonError, requestJson } from "@/lib/http-json";
 import Animated, { FadeInUp, ReduceMotion } from "react-native-reanimated";
 
 import {
@@ -474,37 +475,24 @@ export default function Home() {
         return;
       }
 
-      let response: Response | null = null;
+      let data: any = null;
       let lastRequestError: unknown;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          response = await fetch(
+          data = await requestJson<any>(
             `https://api.rawg.io/api/games?key=${apiKey}&page=${pageNum}&page_size=24&ordering=-rating`,
-            { signal: controller.signal }
+            15000,
           );
+          break;
         } catch (error) {
           lastRequestError = error;
-          if (attempt === 2) throw error;
-        } finally {
-          clearTimeout(timeout);
+          const status = error instanceof HttpJsonError ? error.status : undefined;
+          if (status === undefined || status < 500 || attempt === 1) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
         }
-
-        if (response?.ok) break;
-        if (response && response.status < 500) {
-          throw new Error(`RAWG error: ${response.status}`);
-        }
-        if (attempt === 2) {
-          throw new Error(response ? `RAWG error: ${response.status} after 3 attempts.` : "RAWG request failed after 3 attempts.");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
       }
 
-      if (!response?.ok) throw lastRequestError instanceof Error ? lastRequestError : new Error("RAWG request failed.");
-
-      const data =
-        await response.json();
+      if (data === null) throw lastRequestError instanceof Error ? lastRequestError : new Error("RAWG request failed.");
       if (initial) setCatalogError(null);
 
       const formatted =
@@ -590,7 +578,7 @@ export default function Home() {
         formatted
       );
     } catch (error) {
-      if (initial) setCatalogError("Could not load the game catalog. Check your connection and RAWG API settings.");
+      if (initial) setCatalogError(error instanceof Error ? error.message : "Could not load the game catalog. Check your connection and RAWG API settings.");
       // Keep cached games and the inline catalog message; avoid a second
       // native LogBox error while another screen is in use.
     } finally {
@@ -775,21 +763,10 @@ export default function Home() {
 
       if (apiKey) {
         try {
-          const response =
-            await fetch(
-              `https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(
-                catalogSearchText
-              )}&page_size=40`
-            );
-
-          if (!response.ok) {
-            throw new Error(
-              `RAWG search error: ${response.status}`
-            );
-          }
-
-          const data =
-            await response.json();
+          const data = await requestJson<any>(
+            `https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(catalogSearchText)}&page_size=40`,
+            15000,
+          );
 
           rawgGames =
             (
